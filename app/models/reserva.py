@@ -20,6 +20,7 @@ from app.database import Base
 from app.models.enums import MONEDA_PREDETERMINADA, ModalidadPago
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.models.asignacion import AsignacionServicio, ColaEspera
     from app.models.bahia import Bahia
     from app.models.pago import Pago
     from app.models.servicio import Servicio
@@ -37,6 +38,11 @@ class Reserva(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     codigo: Mapped[str] = mapped_column(String(12), unique=True, index=True, nullable=False)
+    #: RF-019 v1.0: the token the reception ticket's QR encodes. Opaque and
+    #: independent of ``codigo``, which is the one read out loud at the counter.
+    codigo_qr: Mapped[str | None] = mapped_column(
+        String(24), unique=True, index=True, nullable=True
+    )
     usuario_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("usuario.id"), index=True, nullable=False
     )
@@ -68,8 +74,16 @@ class Reserva(Base):
         Integer, ForeignKey("usuario.id"), nullable=True
     )
     cancelada_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # RF-019 flow 1a: the customer arrived without booking and the counter
+    # opened the service on the spot.
+    atencion_sin_reserva: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     # Set at check-in (RF-019).
     observaciones_ingreso: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # RF-024 flow 3a: what the customer objected to when the vehicle was
+    # handed over, which is what sent the service back to review.
+    observacion_revision: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Set at check-out (RF-024).
     conformidad_cliente: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     hora_ingreso: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -110,6 +124,20 @@ class Reserva(Base):
         back_populates="reserva",
         cascade="all, delete-orphan",
         order_by="Pago.registrado_en",
+        lazy="selectin",
+    )
+    asignacion: Mapped[Optional["AsignacionServicio"]] = relationship(
+        "AsignacionServicio",
+        back_populates="reserva",
+        cascade="all, delete-orphan",
+        uselist=False,
+        lazy="selectin",
+    )
+    cola: Mapped[Optional["ColaEspera"]] = relationship(
+        "ColaEspera",
+        back_populates="reserva",
+        cascade="all, delete-orphan",
+        uselist=False,
         lazy="selectin",
     )
 

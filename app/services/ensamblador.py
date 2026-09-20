@@ -8,19 +8,37 @@ change, check-out and cancellation. Routers stay a parse/delegate/map sandwich.
 from sqlalchemy.orm import Session
 
 from app.core.horario import a_lima, desde_bd
-from app.models import EstadoPago, Pago, Permiso, Reserva, Rol, Servicio, Usuario
+from app.models import (
+    AsignacionServicio,
+    Bahia,
+    ColaEspera,
+    DiaNoLaborable,
+    EstadoPago,
+    Pago,
+    Permiso,
+    Reserva,
+    Rol,
+    Servicio,
+    Usuario,
+)
 from app.schemas import (
+    AsignacionOut,
+    BahiaOut,
     BahiaResumen,
     CancelacionOut,
     ClienteResumen,
+    ColaEsperaOut,
+    DiaNoLaborableOut,
     Dinero,
     HistorialItem,
     PagoOut,
     PermisoOut,
     ReservaOut,
+    ResultadoAsignacionOut,
     RolOut,
     ServicioOut,
     ServicioResumen,
+    SugerenciaOut,
     UsuarioOut,
     VehiculoResumen,
 )
@@ -47,6 +65,62 @@ def armar_rol(rol: Rol) -> RolOut:
 
 def armar_permiso(permiso: Permiso) -> PermisoOut:
     return PermisoOut.model_validate(permiso)
+
+
+def armar_bahia(bahia: Bahia) -> BahiaOut:
+    return BahiaOut.model_validate(bahia)
+
+
+def armar_dia_no_laborable(dia: DiaNoLaborable) -> DiaNoLaborableOut:
+    return DiaNoLaborableOut(id=dia.id, fecha=dia.fecha, motivo=dia.motivo, autor=dia.autor)
+
+
+def armar_asignacion(asignacion: AsignacionServicio) -> AsignacionOut:
+    """RF-020: who works this service, where, and whether it was the suggestion."""
+    return AsignacionOut(
+        bahia=BahiaResumen.model_validate(asignacion.bahia),
+        operario=asignacion.operario,
+        operario_id=asignacion.operario_id,
+        asignado_por=asignacion.asignado_por,
+        asignado_en=a_lima(desde_bd(asignacion.asignado_en)),
+        sugerida=asignacion.sugerida,
+    )
+
+
+def armar_cola(cola: ColaEspera) -> ColaEsperaOut:
+    return ColaEsperaOut(posicion=cola.posicion, tiempo_estimado_min=cola.tiempo_estimado_min)
+
+
+def armar_resultado_asignacion(
+    db: Session, resultado, permisos: list[str]
+) -> ResultadoAsignacionOut:
+    """Answer of ``POST /reservas/{id}/asignacion`` (RF-020, including flow 2a)."""
+    sugerencia = None
+    if resultado.bahia_sugerida is not None or resultado.operario_sugerido is not None:
+        sugerencia = SugerenciaOut(
+            bahia=(
+                BahiaResumen.model_validate(resultado.bahia_sugerida)
+                if resultado.bahia_sugerida is not None
+                else None
+            ),
+            operario_id=(
+                resultado.operario_sugerido.id if resultado.operario_sugerido is not None else None
+            ),
+            operario=(
+                resultado.operario_sugerido.nombre_completo
+                if resultado.operario_sugerido is not None
+                else None
+            ),
+        )
+
+    return ResultadoAsignacionOut(
+        reserva=armar_reserva(db, resultado.reserva, permisos),
+        asignacion=(
+            armar_asignacion(resultado.asignacion) if resultado.asignacion is not None else None
+        ),
+        cola=armar_cola(resultado.cola) if resultado.cola is not None else None,
+        sugerencia=sugerencia,
+    )
 
 
 def armar_servicio(servicio: Servicio) -> ServicioOut:
@@ -113,6 +187,10 @@ def armar_reserva(
         creada_en=a_lima(desde_bd(reserva.creada_en)),
         monto=Dinero.de_centimos(reserva.monto_centimos, reserva.moneda),
         modalidad_pago=reserva.modalidad_pago,
+        # The QR is a scanning credential for the counter, so it follows the
+        # same horizontal rule as ``observaciones_ingreso``.
+        codigo_qr=(reserva.codigo_qr if reserva_service.puede_ver_todas(permisos) else None),
+        atencion_sin_reserva=reserva.atencion_sin_reserva,
         servicio=ServicioResumen.model_validate(reserva.servicio),
         vehiculo=VehiculoResumen.model_validate(reserva.vehiculo),
         bahia=BahiaResumen.model_validate(reserva.bahia),
@@ -127,6 +205,7 @@ def armar_reserva(
             reserva.observaciones_ingreso if reserva_service.puede_ver_todas(permisos) else None
         ),
         conformidad_cliente=reserva.conformidad_cliente,
+        observacion_revision=reserva.observacion_revision,
         cancelacion=cancelacion,
         pago=armar_pago(pago) if pago is not None else None,
         historial=[

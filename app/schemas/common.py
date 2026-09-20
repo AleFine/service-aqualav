@@ -1,5 +1,6 @@
-"""Shared building blocks for every response payload."""
+"""Shared building blocks for every request and response payload."""
 
+import re
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -7,6 +8,22 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.enums import MONEDA_PREDETERMINADA
 
 T = TypeVar("T")
+
+# Peruvian mobile number: 9 digits starting with 9. It lives here rather than
+# in ``auth.py`` because RF-035 registers internal staff with the same rule and
+# ``usuario.py`` cannot import ``auth.py`` (which imports it back).
+TELEFONO_REGEX = re.compile(r"^9\d{8}$")
+MENSAJE_TELEFONO = "El teléfono debe tener 9 dígitos y empezar con 9."
+
+
+def normalizar_telefono(valor: str) -> str:
+    """Strip spaces, dashes and the +51 prefix, then validate the format."""
+    limpio = re.sub(r"[\s\-()]", "", valor or "")
+    if limpio.startswith("+51"):
+        limpio = limpio[3:]
+    if not TELEFONO_REGEX.match(limpio):
+        raise ValueError(MENSAJE_TELEFONO)
+    return limpio
 
 
 class Dinero(BaseModel):

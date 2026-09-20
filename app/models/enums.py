@@ -69,10 +69,34 @@ class ModalidadPago(str, Enum):
 
 
 class EstadoCuenta(str, Enum):
-    """EXTENSION POINT: v0.2 adds ``pendiente_verificacion``."""
+    """EXTENSION POINT: v0.2 adds ``pendiente_verificacion``.
+
+    ``suspendida`` is what RF-035 writes when the administrator deactivates an
+    internal account: the login answers 403 from then on (CA-01).
+    """
 
     ACTIVA = "activa"
     SUSPENDIDA = "suspendida"
+
+
+class EstadoBahia(str, Enum):
+    """Whether a bay is physically holding a vehicle right now (RF-020 CA-01).
+
+    It is NOT the same thing as "the bay has a reservation in this block": the
+    booking calendar is derived from ``reserva``, this flag is what the counter
+    sees on the assignment screen the moment a vehicle drives in.
+    """
+
+    LIBRE = "libre"
+    OCUPADA = "ocupada"
+
+
+class MotivoBloqueo(str, Enum):
+    """Why a slot of the agenda is not available (RF-018)."""
+
+    MANTENIMIENTO = "mantenimiento"
+    FERIADO = "feriado"
+    AUSENCIA = "ausencia"
 
 
 #: Default currency for every amount in the MVP (RN-12: PEN, IGV included).

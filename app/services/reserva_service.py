@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.core.codigos import generar_codigo_reserva
+from app.core.codigos import generar_codigo_qr, generar_codigo_reserva
 from app.core.errors import (
     RecursoNoEncontrado,
     ReservaAnticipacionInsuficiente,
@@ -23,8 +23,15 @@ from app.repositories import bahia as bahia_repo
 from app.repositories import reserva as reserva_repo
 from app.repositories import transicion as transicion_repo
 from app.repositories import vehiculo as vehiculo_repo
-from app.schemas import TAMANIO_PAGINA_DEFECTO, TAMANIO_PAGINA_MAXIMO, Dinero, ReservaCrear
-from app.services import eventos, operacion_service, servicio_service
+from app.schemas import (
+    TAMANIO_PAGINA_DEFECTO,
+    TAMANIO_PAGINA_MAXIMO,
+    AtencionInmediataIn,
+    CheckInIn,
+    Dinero,
+    ReservaCrear,
+)
+from app.services import agenda_service, eventos, operacion_service, servicio_service
 from app.services.disponibilidad_service import ANTICIPACION_MINIMA, bloques_cercanos
 from app.services.notificador import NOTIFICADOR_PREDETERMINADO, Notificador
 from app.services.politica_cancelacion import POLITICA_PREDETERMINADA, PoliticaCancelacion
@@ -43,6 +50,15 @@ def _generar_codigo(db: Session) -> str:
         if not reserva_repo.existe_codigo(db, codigo):
             return codigo
     return generar_codigo_reserva()  # pragma: no cover - practically unreachable
+
+
+def _generar_qr(db: Session) -> str:
+    """A unique token for the reception ticket's QR (RF-019 v1.0)."""
+    for _ in range(INTENTOS_CODIGO):
+        codigo = generar_codigo_qr()
+        if not reserva_repo.existe_codigo_qr(db, codigo):
+            return codigo
+    return generar_codigo_qr()  # pragma: no cover - practically unreachable
 
 
 def puede_ver_todas(permisos: list[str]) -> bool:
@@ -82,13 +98,21 @@ def crear(
             detalles=[detalle("inicio", "Elige un bloque con al menos 60 minutos de anticipación.")]
         )
 
-    if not dentro_de_horario(inicio_lima, fin_lima):
+    # RN-07 is DATA now (RF-018): the calendar carries the opening hours of the
+    # week plus the holidays and shop-wide closures declared for that date, so
+    # a booking on a holiday is refused with the same error as one at midnight.
+    calendario = agenda_service.calendario(db, inicio_lima.date(), fin_lima.date())
+    if not dentro_de_horario(inicio_lima, fin_lima, calendario):
+        motivo = calendario.motivo_no_laborable(inicio_lima.date())
         raise ReservaFueraDeHorario(
             detalles=[
                 detalle(
                     "inicio",
-                    f"El servicio dura {servicio.duracion_min} minutos y debe terminar "
-                    "antes del cierre.",
+                    motivo
+                    or (
+                        f"El servicio dura {servicio.duracion_min} minutos y debe terminar "
+                        "antes del cierre."
+                    ),
                 )
             ]
         )
@@ -101,6 +125,12 @@ def crear(
     bahias = bahia_repo.listar_activas_bloqueadas(db)
     ocupadas = reserva_repo.bahias_ocupadas(
         db, inicio_utc, fin_utc, transicion_repo.listar_estados_no_terminales(db)
+    )
+    # RF-018 CA-01: a blocked bay is not on offer, so a slot the agenda took
+    # out never comes back through the booking door either.
+    franjas = agenda_service.franjas_bloqueadas(db, inicio_lima.date(), fin_lima.date())
+    ocupadas = ocupadas | agenda_service.bahias_bloqueadas(
+        franjas, [bahia.id for bahia in bahias], inicio_utc, fin_utc
     )
     libre = next((bahia for bahia in bahias if bahia.id not in ocupadas), None)
 
@@ -117,6 +147,7 @@ def crear(
     reserva = reserva_repo.crear(
         db,
         codigo=_generar_codigo(db),
+        codigo_qr=_generar_qr(db),
         usuario_id=usuario.id,
         vehiculo_id=vehiculo.id,
         servicio_id=servicio.id,
@@ -167,6 +198,136 @@ def crear(
         {"reserva_id": reserva.id, "codigo": reserva.codigo},
     )
     return reserva
+
+
+def _primera_bahia_libre(db: Session, inicio_utc: datetime, fin_utc: datetime):
+    """The lowest-id active bay free in ``[inicio, fin)``, or ``None``.
+
+    Free means: no active reservation overlapping (RN-03) and no blocking
+    covering the slot (RF-018 CA-01).
+    """
+    bahias = bahia_repo.listar_activas_bloqueadas(db)
+    ocupadas = reserva_repo.bahias_ocupadas(
+        db, inicio_utc, fin_utc, transicion_repo.listar_estados_no_terminales(db)
+    )
+    franjas = agenda_service.franjas_bloqueadas(
+        db, a_lima(inicio_utc).date(), a_lima(fin_utc).date()
+    )
+    ocupadas = ocupadas | agenda_service.bahias_bloqueadas(
+        franjas, [bahia.id for bahia in bahias], inicio_utc, fin_utc
+    )
+    return next((bahia for bahia in bahias if bahia.id not in ocupadas), None)
+
+
+def atencion_inmediata(
+    db: Session,
+    datos: AtencionInmediataIn,
+    autor: Usuario,
+    permisos: list[str],
+    *,
+    notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
+) -> Reserva:
+    """Serve a customer who arrived without booking (RF-019 flow 1a).
+
+    The counter opens the service on the spot, "if a bay is free". RN-02 does
+    not apply - the vehicle is already here - but RN-07 does: the shop cannot
+    take work outside its opening hours or on a day it declared closed.
+
+    The reservation is BORN confirmed and is immediately checked in through
+    :func:`app.services.operacion_service.check_in`, so where a walk-in lands
+    is still the row in ``transicion_estado`` and not a literal here (P3), and
+    the timeline reads ``confirmada -> en_recepcion`` exactly like a booked one.
+    """
+    servicio = servicio_service.obtener_publico(db, datos.servicio_id)
+    precio = servicio_service.precio_vigente(servicio)
+
+    vehiculo = vehiculo_repo.obtener_por_id(db, datos.vehiculo_id)
+    if vehiculo is None:
+        raise RecursoNoEncontrado(
+            "No encontramos ese vehículo. Regístralo antes de abrir la atención.",
+            detalles=[detalle("vehiculo_id", "El vehículo no existe.")],
+        )
+
+    inicio_lima = a_lima(ahora())
+    fin_lima = inicio_lima + timedelta(minutes=servicio.duracion_min)
+
+    calendario = agenda_service.calendario(db, inicio_lima.date(), fin_lima.date())
+    if not dentro_de_horario(inicio_lima, fin_lima, calendario):
+        motivo = calendario.motivo_no_laborable(inicio_lima.date())
+        raise ReservaFueraDeHorario(
+            detalles=[
+                detalle(
+                    "inicio",
+                    motivo
+                    or (
+                        f"El servicio dura {servicio.duracion_min} minutos y no alcanza "
+                        "antes del cierre."
+                    ),
+                )
+            ]
+        )
+
+    inicio_utc = a_utc(inicio_lima)
+    fin_utc = a_utc(fin_lima)
+    libre = _primera_bahia_libre(db, inicio_utc, fin_utc)
+    if libre is None:
+        raise ReservaBloqueOcupado(
+            "No hay una bahía libre para atender ahora mismo. "
+            "Ofrece al cliente una reserva para el siguiente bloque disponible.",
+            detalles=[
+                detalle("inicio", f"Bloque libre cercano: {bloque.inicio.isoformat()}.")
+                for bloque in bloques_cercanos(db, servicio, inicio_lima)
+            ],
+        )
+
+    reserva = reserva_repo.crear(
+        db,
+        codigo=_generar_codigo(db),
+        codigo_qr=_generar_qr(db),
+        usuario_id=vehiculo.usuario_id,
+        vehiculo_id=vehiculo.id,
+        servicio_id=servicio.id,
+        bahia_id=libre.id,
+        inicio=inicio_utc,
+        fin=fin_utc,
+        estado=EstadoReserva.CONFIRMADA.value,
+        monto_centimos=precio.monto_centimos,
+        moneda=precio.moneda,
+        modalidad_pago=ModalidadPago.PRESENCIAL.value,
+        atencion_sin_reserva=True,
+    )
+    reserva_repo.agregar_historial(
+        db,
+        reserva_id=reserva.id,
+        estado=reserva.estado,
+        autor_id=autor.id,
+        ocurrido_en=ahora_utc(),
+    )
+    eventos.registrar_evento(
+        db,
+        eventos.ENTIDAD_RESERVA,
+        reserva.id,
+        eventos.RESERVA_ATENCION_INMEDIATA,
+        autor_id=autor.id,
+        datos={
+            "codigo": reserva.codigo,
+            "servicio_id": servicio.id,
+            "bahia_id": libre.id,
+            "inicio": inicio_utc.isoformat(),
+            "monto_centimos": reserva.monto_centimos,
+        },
+    )
+
+    # The check-in commits the whole thing, so a rejected entry leaves no
+    # half-created reservation behind.
+    return operacion_service.check_in(
+        db,
+        reserva,
+        CheckInIn(observaciones=datos.observaciones, confirmar_retraso=True),
+        autor,
+        permisos,
+        notificador=notificador,
+    )
 
 
 def listar(

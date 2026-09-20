@@ -237,22 +237,14 @@ def codigo_error(respuesta) -> str:
 ESTADOS_DE_BAHIA = ("en_lavado", "secado", "acabado", "finalizado")
 
 
-def forzar_estado(db, reserva_id: int, estado: str, autor_id: int | None = None) -> None:
-    """Put a reservation in a state whose owning operation is not built yet.
+def asignar(api_recepcion, reserva_id: int, **cuerpo):
+    """``POST /reservas/{id}/asignacion``: the real operation of RF-020.
 
-    ``en_recepcion -> asignado`` belongs to ``POST /reservas/{id}/asignacion``
-    (RF-020), which INC-1B implements. Until that endpoint exists this is the
-    only honest way to exercise what happens AFTER the assignment: the same
-    trick the late-arrival test uses to insert a reservation the API would
-    never create. The history row is written too, so the timeline stays whole.
+    INC-1A had to fake this jump with a direct write because the endpoint did
+    not exist yet; INC-1B implements it, so the bridge is gone and every test
+    walks the chain the way the shop does.
     """
-    from app.models import Reserva, ReservaEstadoHistorial
-
-    reserva = db.get(Reserva, reserva_id)
-    assert reserva is not None
-    reserva.estado = estado
-    db.add(ReservaEstadoHistorial(reserva_id=reserva_id, estado=estado, autor_id=autor_id))
-    db.commit()
+    return api_recepcion.post(f"{RUTA}/reservas/{reserva_id}/asignacion", json=cuerpo)
 
 
 def avanzar_estado(api, reserva_id: int, estado: str):
@@ -260,21 +252,21 @@ def avanzar_estado(api, reserva_id: int, estado: str):
     return api.post(f"{RUTA}/reservas/{reserva_id}/estado", json={"estado": estado})
 
 
-def llevar_hasta_finalizado(
-    api_recepcion, api_operario, db, reserva_id: int, autor_id: int | None = None
-) -> None:
+def llevar_hasta_finalizado(api_recepcion, api_operario, db, reserva_id: int) -> None:
     """Walk a confirmed reservation down the whole v1.0 operative chain.
 
     ``confirmada -> en_recepcion -> asignado -> en_lavado -> secado -> acabado
-    -> finalizado``: the check-in and the four bay moves go through the API,
-    the assignment is forced (see :func:`forzar_estado`).
+    -> finalizado``, every move through its own endpoint: check-in (RF-019),
+    assignment (RF-020) and the four bay moves (RF-021).
     """
     respuesta = api_recepcion.post(
         f"{RUTA}/reservas/{reserva_id}/check-in", json={"confirmar_retraso": False}
     )
     assert respuesta.status_code == 200, respuesta.text
 
-    forzar_estado(db, reserva_id, "asignado", autor_id)
+    respuesta = asignar(api_recepcion, reserva_id)
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["asignacion"] is not None, respuesta.text
 
     for estado in ESTADOS_DE_BAHIA:
         respuesta = avanzar_estado(api_operario, reserva_id, estado)

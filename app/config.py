@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # Every business rule (RN-02, RN-07) is evaluated in this timezone.
     zona_horaria: str = "America/Lima"
 
+    # --- Simulated external providers (plan section 4) -------------------
+    # Every option here ships with a working default so the API boots with no
+    # ``.env`` at all; only "simulado" exists today and it never uses the
+    # network. An unknown value falls back to the simulation on purpose.
+    correo_proveedor: str = "simulado"
+
     # --- Seed ------------------------------------------------------------
     seed_enabled: bool = True
     seed_admin_correo: str = "admin@aqualav.pe"

@@ -300,7 +300,7 @@ def test_cancelar_una_reserva_en_lavado_responde_422(
     api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
 ):
     """RF-016 CA-02: una vez en la bahía la transición ya no está declarada."""
-    from tests.conftest import avanzar_estado, forzar_estado
+    from tests.conftest import asignar, avanzar_estado
 
     reserva = crear_reserva(
         api_cliente, servicio_medio.id, vehiculo_id, instante(proximo_lunes(), 10, 0)
@@ -308,7 +308,7 @@ def test_cancelar_una_reserva_en_lavado_responde_422(
     api_recepcion.post(
         f"{RUTA}/reservas/{reserva['id']}/check-in", json={"confirmar_retraso": False}
     )
-    forzar_estado(db, reserva["id"], "asignado")
+    assert asignar(api_recepcion, reserva["id"]).status_code == 200
     assert avanzar_estado(api_operario, reserva["id"], "en_lavado").status_code == 200
 
     respuesta = api_recepcion.post(

@@ -10,6 +10,7 @@ from app.core.errors import (
     CorreoYaRegistrado,
     CredencialesInvalidas,
     CuentaBloqueada,
+    CuentaDesactivada,
     NoAutenticado,
     detalle,
 )
@@ -113,7 +114,8 @@ def autenticar(db: Session, correo: str, password: str) -> Sesion:
 
     Failed attempts are counted on the account; the fifth one locks it for
     fifteen minutes and the API answers 429 with the remaining seconds
-    (CA-02). A successful login clears the counter.
+    (CA-02). A successful login clears the counter. An account the
+    administrator deactivated is refused with 403 (RF-035 CA-01).
     """
     usuario = usuario_repo.obtener_por_correo(db, correo)
 
@@ -154,7 +156,13 @@ def autenticar(db: Session, correo: str, password: str) -> Sesion:
         raise CredencialesInvalidas()
 
     if usuario.estado_cuenta != EstadoCuenta.ACTIVA.value:
-        raise NoAutenticado("Tu cuenta no está activa. Comunícate con el administrador del local.")
+        # RF-035 CA-01: a deactivated worker gets 403, not 401. The password was
+        # right; what is missing is the authorization to use the account, and
+        # saying so is what sends them to the administrator instead of to the
+        # "forgot my password" screen.
+        raise CuentaDesactivada(
+            detalles=[detalle("correo", "La cuenta está desactivada por el administrador.")]
+        )
 
     usuario.intentos_fallidos = 0
     usuario.bloqueado_hasta = None

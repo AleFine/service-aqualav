@@ -4,18 +4,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.bahia import BahiaResumen
 from app.schemas.common import Dinero, nombre_de_autor
 from app.schemas.pago import PagoOut
 from app.schemas.servicio import ServicioResumen
 from app.schemas.usuario import ClienteResumen
 from app.schemas.vehiculo import VehiculoResumen
-
-
-class BahiaResumen(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    nombre: str
 
 
 class HistorialItem(BaseModel):
@@ -84,6 +78,36 @@ class CheckOutIn(BaseModel):
     conformidad_cliente: bool
 
 
+class RevisionIn(BaseModel):
+    """Body of ``POST /reservas/{id}/revision`` (RF-024 flow 3a).
+
+    The observation is mandatory: sending a finished service back to the bay
+    without saying what is wrong with it would leave the operator guessing.
+    """
+
+    observacion: str = Field(min_length=1, max_length=500)
+
+    @field_validator("observacion")
+    @classmethod
+    def _observacion(cls, valor: str) -> str:
+        limpio = valor.strip()
+        if not limpio:
+            raise ValueError("Indica qué observó el cliente para enviar el servicio a revisión.")
+        return limpio
+
+
+class AtencionInmediataIn(BaseModel):
+    """Body of ``POST /reservas/atencion-inmediata`` (RF-019 flow 1a).
+
+    A walk-in customer: the counter opens the service on the spot, on an
+    already registered vehicle, provided a bay is free right now.
+    """
+
+    servicio_id: int = Field(ge=1)
+    vehiculo_id: int = Field(ge=1)
+    observaciones: str | None = Field(default=None, max_length=500)
+
+
 class ReservaOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -95,6 +119,10 @@ class ReservaOut(BaseModel):
     creada_en: datetime
     monto: Dinero
     modalidad_pago: str
+    # RF-019 v1.0: the token the reception ticket's QR encodes. Only a caller
+    # holding ``reserva:leer_todas`` needs it - it is a scanning credential.
+    codigo_qr: str | None = None
+    atencion_sin_reserva: bool = False
     servicio: ServicioResumen
     vehiculo: VehiculoResumen
     bahia: BahiaResumen
@@ -113,6 +141,8 @@ class ReservaOut(BaseModel):
     # Written at check-out (RF-024). Visible to everyone: it is the customer's
     # own answer, and they are entitled to see what was recorded.
     conformidad_cliente: bool | None = None
+    # Written when the customer objects at the counter (RF-024 flow 3a).
+    observacion_revision: str | None = None
     cancelacion: CancelacionOut | None = None
     pago: PagoOut | None = None
     historial: list[HistorialItem] = Field(default_factory=list)

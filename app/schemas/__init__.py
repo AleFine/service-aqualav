@@ -1,6 +1,29 @@
 """Pydantic v2 schemas. Field names mirror the API contract verbatim."""
 
+from app.schemas.agenda import (
+    VISTA_DIA,
+    VISTA_SEMANA,
+    VISTAS,
+    AgendaBahiaOut,
+    AgendaDiaOut,
+    AgendaOut,
+    AgendaReservaOut,
+    BloqueoIn,
+    BloqueoOut,
+    DiaNoLaborableIn,
+    DiaNoLaborableOut,
+    HorarioAtencionIn,
+    HorarioAtencionOut,
+)
+from app.schemas.asignacion import (
+    AsignacionIn,
+    AsignacionOut,
+    ColaEsperaOut,
+    ResultadoAsignacionOut,
+    SugerenciaOut,
+)
 from app.schemas.auth import LoginIn, RefreshIn, RegistroIn, TokenOut
+from app.schemas.bahia import BahiaActualizar, BahiaCrear, BahiaOut, BahiaResumen
 from app.schemas.common import (
     TAMANIO_PAGINA_DEFECTO,
     TAMANIO_PAGINA_MAXIMO,
@@ -11,12 +34,13 @@ from app.schemas.common import (
     Lista,
     Pagina,
     nombre_de_autor,
+    normalizar_telefono,
 )
 from app.schemas.disponibilidad import BloqueDisponible, DisponibilidadOut
 from app.schemas.estado import EstadoCatalogoOut
 from app.schemas.pago import PagoCrear, PagoOut
 from app.schemas.reserva import (
-    BahiaResumen,
+    AtencionInmediataIn,
     CambioEstadoIn,
     CancelacionIn,
     CancelacionOut,
@@ -25,31 +49,57 @@ from app.schemas.reserva import (
     HistorialItem,
     ReservaCrear,
     ReservaOut,
+    RevisionIn,
 )
 from app.schemas.rol import AsignacionRolIn, PermisoOut, RolOut
 from app.schemas.servicio import ServicioActualizar, ServicioCrear, ServicioOut, ServicioResumen
-from app.schemas.usuario import ClienteResumen, UsuarioOut
+from app.schemas.usuario import (
+    ClienteResumen,
+    UsuarioInternoActualizar,
+    UsuarioInternoCrear,
+    UsuarioOut,
+)
 from app.schemas.vehiculo import VehiculoIn, VehiculoOut, VehiculoResumen
 
 __all__ = [
     "TAMANIO_PAGINA_DEFECTO",
     "TAMANIO_PAGINA_MAXIMO",
+    "VISTAS",
+    "VISTA_DIA",
+    "VISTA_SEMANA",
+    "AgendaBahiaOut",
+    "AgendaDiaOut",
+    "AgendaOut",
+    "AgendaReservaOut",
+    "AsignacionIn",
+    "AsignacionOut",
     "AsignacionRolIn",
+    "AtencionInmediataIn",
+    "BahiaActualizar",
+    "BahiaCrear",
+    "BahiaOut",
     "BahiaResumen",
     "BloqueDisponible",
+    "BloqueoIn",
+    "BloqueoOut",
     "CambioEstadoIn",
     "CancelacionIn",
     "CancelacionOut",
     "CheckInIn",
     "CheckOutIn",
     "ClienteResumen",
+    "ColaEsperaOut",
     "ContenidoError",
     "DetalleError",
+    "DiaNoLaborableIn",
+    "DiaNoLaborableOut",
     "Dinero",
     "DisponibilidadOut",
     "ErrorBody",
     "EstadoCatalogoOut",
     "HistorialItem",
+    "HorarioAtencionIn",
+    "HorarioAtencionOut",
     "Lista",
     "LoginIn",
     "Pagina",
@@ -60,15 +110,21 @@ __all__ = [
     "RegistroIn",
     "ReservaCrear",
     "ReservaOut",
+    "ResultadoAsignacionOut",
+    "RevisionIn",
     "RolOut",
     "ServicioActualizar",
     "ServicioCrear",
     "ServicioOut",
     "ServicioResumen",
+    "SugerenciaOut",
     "TokenOut",
+    "UsuarioInternoActualizar",
+    "UsuarioInternoCrear",
     "UsuarioOut",
     "VehiculoIn",
     "VehiculoOut",
     "VehiculoResumen",
     "nombre_de_autor",
+    "normalizar_telefono",
 ]

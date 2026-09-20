@@ -4,6 +4,8 @@ The exact same rules are mirrored by the mobile client so the user never
 reaches the server with a password the client could have rejected.
 """
 
+import secrets
+
 LONGITUD_MINIMA = 8
 
 # Human readable description of every unmet rule, in Spanish (RNF-009 M3).
@@ -36,3 +38,30 @@ def validar_politica(password: str) -> list[str]:
 def cumple_politica(password: str) -> bool:
     """Convenience predicate over :func:`validar_politica`."""
     return not validar_politica(password)
+
+
+# Alphabet of a generated temporary password (RF-035): the ambiguous glyphs are
+# out because the worker reads it from an e-mail and types it once.
+ALFABETO_MAYUSCULAS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+ALFABETO_MINUSCULAS = "abcdefghijkmnopqrstuvwxyz"
+ALFABETO_DIGITOS = "23456789"
+LONGITUD_TEMPORAL = 12
+
+
+def generar_password_temporal() -> str:
+    """Return a random password that satisfies :func:`validar_politica` by construction.
+
+    RF-035: the administrator never chooses the worker's password; the system
+    generates it and the mail provider delivers it. One character of each
+    required class is placed first and then the whole string is shuffled, so
+    the policy holds without a retry loop.
+    """
+    alfabeto = ALFABETO_MAYUSCULAS + ALFABETO_MINUSCULAS + ALFABETO_DIGITOS
+    caracteres = [
+        secrets.choice(ALFABETO_MAYUSCULAS),
+        secrets.choice(ALFABETO_MINUSCULAS),
+        secrets.choice(ALFABETO_DIGITOS),
+    ]
+    caracteres += [secrets.choice(alfabeto) for _ in range(LONGITUD_TEMPORAL - len(caracteres))]
+    secrets.SystemRandom().shuffle(caracteres)
+    return "".join(caracteres)

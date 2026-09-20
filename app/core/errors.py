@@ -104,6 +104,23 @@ class PermisoDenegado(AppError):
     )
 
 
+class CuentaDesactivada(AppError):
+    """RF-035 CA-01: a deactivated internal account may not sign in.
+
+    Deliberately a 403 and not the 401 of ``CREDENCIALES_INVALIDAS``: the
+    credentials WERE right, so telling the worker their account was disabled is
+    what lets them ask the administrator instead of resetting a password that
+    is not the problem. It reveals nothing a colleague does not already know.
+    """
+
+    codigo = "CUENTA_DESACTIVADA"
+    http_status = 403
+    mensaje = (
+        "Tu cuenta está desactivada y no puede iniciar sesión. "
+        "Pide al administrador del local que vuelva a activarla."
+    )
+
+
 class CambioDeRolPropioDenegado(AppError):
     """RF-004 flow 3a: nobody may take their own administration away."""
 
@@ -182,6 +199,81 @@ class RetrasoRequiereConfirmacion(AppError):
 
 
 # --------------------------------------------------------------------------
+# Agenda, bays and assignment (RF-018, RF-020, RF-035)
+# --------------------------------------------------------------------------
+class FranjaConReservas(AppError):
+    """RF-018 flow 4a / CA-02: resolve the bookings before blocking the slot."""
+
+    codigo = "FRANJA_CON_RESERVAS"
+    http_status = 409
+    mensaje = (
+        "La franja que quieres bloquear tiene reservas activas. "
+        "Reubícalas o cancélalas antes de aplicar el bloqueo."
+    )
+
+
+class BahiaConReservas(AppError):
+    """A bay still holding work cannot be deactivated."""
+
+    codigo = "BAHIA_CON_RESERVAS"
+    http_status = 409
+    mensaje = (
+        "La bahía tiene reservas activas asignadas. "
+        "Reubícalas o ciérralas antes de desactivarla."
+    )
+
+
+class SinOperarioDisponible(AppError):
+    """RF-020: there is nobody who can execute the service."""
+
+    codigo = "SIN_OPERARIO_DISPONIBLE"
+    http_status = 409
+    mensaje = (
+        "No hay operarios activos a quienes asignar el servicio. "
+        "Registra o reactiva un operario antes de asignar."
+    )
+
+
+class OperarioOcupado(AppError):
+    """RF-020 flow 3a: the chosen operator already has work in hand."""
+
+    codigo = "OPERARIO_OCUPADO"
+    http_status = 409
+    mensaje = (
+        "El operario elegido ya tiene un servicio en curso. "
+        "Confirma la asignación de todas formas o elige a otro operario."
+    )
+
+
+class UsuarioConServiciosEnCurso(AppError):
+    """RF-035 flow 4a / CA-02: reassign the work before disabling the account."""
+
+    codigo = "USUARIO_CON_SERVICIOS_EN_CURSO"
+    http_status = 409
+    mensaje = (
+        "El usuario tiene servicios en curso asignados. "
+        "Reasígnalos a otra persona antes de desactivar la cuenta."
+    )
+
+
+class LimiteDeBahias(AppError):
+    """RE-07: the shop has a fixed number of physical bays."""
+
+    codigo = "LIMITE_DE_BAHIAS"
+    http_status = 422
+    mensaje = (
+        "El local no admite más bahías activas de las que tiene físicamente. "
+        "Desactiva una bahía antes de habilitar otra."
+    )
+
+
+class NombreDeBahiaDuplicado(AppError):
+    codigo = "NOMBRE_DE_BAHIA_DUPLICADO"
+    http_status = 409
+    mensaje = "Ya existe una bahía con ese nombre. Usa otro nombre para identificarla."
+
+
+# --------------------------------------------------------------------------
 # Payments
 # --------------------------------------------------------------------------
 class PagoPendiente(AppError):
@@ -236,6 +328,7 @@ ERRORES_POR_CODIGO: dict[str, type[AppError]] = {
         CorreoYaRegistrado,
         CredencialesInvalidas,
         CuentaBloqueada,
+        CuentaDesactivada,
         NoAutenticado,
         PermisoDenegado,
         CambioDeRolPropioDenegado,
@@ -246,6 +339,13 @@ ERRORES_POR_CODIGO: dict[str, type[AppError]] = {
         ReservaBloqueOcupado,
         TransicionInvalida,
         RetrasoRequiereConfirmacion,
+        FranjaConReservas,
+        BahiaConReservas,
+        SinOperarioDisponible,
+        OperarioOcupado,
+        UsuarioConServiciosEnCurso,
+        LimiteDeBahias,
+        NombreDeBahiaDuplicado,
         PagoPendiente,
         IdempotencyKeyRequerida,
         RecursoNoEncontrado,

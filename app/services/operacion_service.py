@@ -34,8 +34,8 @@ from app.models import EstadoReserva, Reserva, TransicionEstado, Usuario
 from app.repositories import pago as pago_repo
 from app.repositories import reserva as reserva_repo
 from app.repositories import transicion as transicion_repo
-from app.schemas import CheckInIn, CheckOutIn
-from app.services import eventos
+from app.schemas import CheckInIn, CheckOutIn, RevisionIn
+from app.services import bahia_service, eventos
 from app.services.notificador import NOTIFICADOR_PREDETERMINADO, Notificador
 
 #: RF-019 flow 3a: past this delay the check-in needs an explicit confirmation.
@@ -52,6 +52,11 @@ ENDPOINT_GENERICO = "estado"
 ENDPOINT_CHECK_IN = "check_in"
 ENDPOINT_CHECK_OUT = "check_out"
 ENDPOINT_CANCELACION = "cancelacion"
+#: RF-020: bay and operator assignment.
+ENDPOINT_ASIGNACION = "asignacion"
+#: RF-024 flow 3a: the customer objected to the result. It owns its own move so
+#: the check-out never has two destinations to choose from.
+ENDPOINT_REVISION = "revision"
 
 
 def transiciones_permitidas(db: Session, reserva: Reserva, permisos: list[str]) -> list[str]:
@@ -71,6 +76,30 @@ def transiciones_permitidas(db: Session, reserva: Reserva, permisos: list[str]) 
 
 def _normalizar(destino: str) -> str:
     return destino.value if isinstance(destino, EstadoReserva) else str(destino)
+
+
+def tiene_operacion_declarada(db: Session, reserva: Reserva, endpoint: str) -> bool:
+    """Whether ``endpoint`` still owns a move out of the current state.
+
+    Data-driven "is this operation applicable?": the waiting queue of RF-020
+    uses it to drop the rows of reservations that already left the counter,
+    without naming a single state.
+    """
+    return any(
+        transicion.endpoint == endpoint
+        for transicion in transicion_repo.listar_por_origen(db, reserva.estado)
+    )
+
+
+def es_terminal(db: Session, estado: str) -> bool:
+    """Whether no declared move leaves ``estado`` (P3).
+
+    The ONLY definition of "the service is over" in the code base. It is what
+    tells :func:`cambiar_estado` to give the bay back, so the delivery of
+    RF-024 and the cancellation of RF-016 release it through the same line and
+    a state added as data behaves correctly with no change here.
+    """
+    return estado not in transicion_repo.listar_estados_no_terminales(db)
 
 
 def destino_declarado(db: Session, reserva: Reserva, endpoint: str) -> str:
@@ -206,6 +235,12 @@ def cambiar_estado(
         # ends the service is declared in the table, never listed here (P3).
         reserva.hora_fin_real = momento
 
+    if es_terminal(db, destino):
+        # RF-024 step 4 / RF-016: a finished or cancelled service stops holding
+        # the bay and leaves the waiting queue. Terminality is read from the
+        # table, so this is not a list of states in disguise.
+        bahia_service.liberar_recursos(db, reserva)
+
     reserva_repo.agregar_historial(
         db,
         reserva_id=reserva.id,
@@ -243,13 +278,22 @@ def buscar(
     *,
     codigo: str | None = None,
     placa: str | None = None,
+    qr: str | None = None,
 ) -> list[Reserva]:
-    """Find today's and upcoming non terminal reservations (RF-019 step 1)."""
+    """Find today's and upcoming non terminal reservations (RF-019 step 1).
+
+    v1.0 adds the third entry point: the QR printed on the reception ticket.
+    Scanning it is the same query by another key, so nothing else about the
+    check-in changes (RF-019 delta).
+    """
     codigo_limpio = (codigo or "").strip().upper() or None
     placa_limpia = "".join((placa or "").split()).upper() or None
+    qr_limpio = "".join((qr or "").split()).upper() or None
 
-    if codigo_limpio is None and placa_limpia is None:
-        raise RecursoNoEncontrado("Indica un código de reserva o una placa para buscar.")
+    if codigo_limpio is None and placa_limpia is None and qr_limpio is None:
+        raise RecursoNoEncontrado(
+            "Indica un código de reserva, una placa o un código QR para buscar."
+        )
 
     inicio_del_dia = a_lima(ahora()).replace(hour=0, minute=0, second=0, microsecond=0)
     encontradas = reserva_repo.buscar_activas(
@@ -257,11 +301,13 @@ def buscar(
         transicion_repo.listar_estados_no_terminales(db),
         codigo=codigo_limpio,
         placa=placa_limpia,
+        codigo_qr=qr_limpio,
         desde=inicio_del_dia,
     )
     if not encontradas:
         raise RecursoNoEncontrado(
-            "No encontramos una reserva activa con esos datos. Verifica el código o la placa."
+            "No encontramos una reserva activa con esos datos. "
+            "Verifica el código, la placa o vuelve a escanear el QR."
         )
     return encontradas
 
@@ -369,6 +415,21 @@ def check_out(
     reserva.hora_entrega = ahora_utc()
     reserva.conformidad_cliente = bool(datos.conformidad_cliente)
 
+    # RF-024 step 4: the delivery opens the rating window. HOOK, on purpose -
+    # ``calificacion`` is INC-6 (RF-031) and back-filling the moment the window
+    # opened would be impossible, so the event is written now and RN-10 will
+    # count its seven calendar days from here.
+    # TODO(INC-6, RF-031): read this event to expose "puedes calificar" and to
+    # close the window seven days later. The call site must not change.
+    eventos.registrar_evento(
+        db,
+        eventos.ENTIDAD_RESERVA,
+        reserva.id,
+        eventos.RESERVA_CALIFICACION_HABILITADA,
+        autor_id=autor.id if autor else None,
+        datos={"habilitada_en": reserva.hora_entrega.isoformat()},
+    )
+
     return cambiar_estado(
         db,
         reserva,
@@ -378,5 +439,50 @@ def check_out(
         origen_llamada=ENDPOINT_CHECK_OUT,
         accion=eventos.RESERVA_CHECK_OUT,
         datos={"conformidad_cliente": bool(datos.conformidad_cliente)},
+        notificador=notificador,
+    )
+
+
+def enviar_a_revision(
+    db: Session,
+    reserva: Reserva,
+    datos: RevisionIn,
+    autor: Usuario,
+    permisos: list[str],
+    *,
+    notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
+) -> Reserva:
+    """Register what the customer objected to and send the service back (RF-024 3a).
+
+    Annex A v1.0 gives ``finalizado`` TWO exits - the delivery and the review -
+    and INC-1A gave each one its own owning endpoint precisely so neither has
+    to guess. This one keeps the observation, which is what the operator reads
+    before reworking the vehicle (``en_revision -> acabado``).
+
+    The bay is NOT released: the vehicle never left, and ``en_revision`` has
+    outgoing moves, so it is not terminal.
+    """
+    destino = destino_declarado(db, reserva, ENDPOINT_REVISION)
+
+    validar_transicion(
+        db,
+        reserva,
+        destino,
+        permisos,
+        origen_llamada=ENDPOINT_REVISION,
+    )
+
+    reserva.observacion_revision = datos.observacion.strip()
+    reserva.conformidad_cliente = False
+
+    return cambiar_estado(
+        db,
+        reserva,
+        destino,
+        autor,
+        permisos,
+        origen_llamada=ENDPOINT_REVISION,
+        accion=eventos.RESERVA_EN_REVISION,
+        datos={"observacion": reserva.observacion_revision},
         notificador=notificador,
     )

@@ -33,36 +33,17 @@ def listar_permisos(db: Session) -> list[Permiso]:
     return usuario_repo.listar_permisos(db)
 
 
-def asignar_rol(db: Session, usuario_id: int, rol_id: int, autor: Usuario) -> Usuario:
-    """Give ``usuario_id`` the role ``rol_id`` (RF-004 steps 3 and 4).
+def aplicar_rol(db: Session, usuario: Usuario, rol: Rol, autor: Usuario) -> bool:
+    """Move ``usuario`` to ``rol`` inside the CALLER's transaction.
 
-    Two rules guard the change:
-
-    * flow 3a - the caller may not leave themselves without
-      ``rol:administrar``. The check is on the PERMISSION the destination role
-      grants, not on its name, so it keeps working for any role the shop
-      invents later;
-    * flow 4a - a role change invalidates the refresh tokens of the affected
-      user, so the new permissions apply on the next token instead of on the
-      next login (:func:`app.services.auth_service.revocar_tokens_de_refresco`).
-
-    Assigning the role the user already holds is a no-op: nothing is written to
-    the audit trail and no session is dropped.
+    Split out of :func:`asignar_rol` so RF-035 can change a worker's role in the
+    same write as the rest of their profile without committing twice. Returns
+    whether anything changed; assigning the role the user already holds is a
+    no-op that writes nothing to the audit trail and drops no session.
     """
-    usuario = usuario_repo.obtener_por_id(db, usuario_id)
-    if usuario is None:
-        raise RecursoNoEncontrado("No encontramos ese usuario.")
-
-    rol = usuario_repo.obtener_rol_por_id(db, rol_id)
-    if rol is None:
-        raise RecursoNoEncontrado(
-            "No encontramos ese rol. Consulta los roles disponibles antes de asignarlo.",
-            detalles=[detalle("rol_id", "El rol no existe.")],
-        )
-
     anterior = usuario.rol
     if anterior.id == rol.id:
-        return usuario
+        return False
 
     if usuario.id == autor.id and PERMISO_ADMINISTRAR_ROLES not in set(rol.codigos_permisos):
         raise CambioDeRolPropioDenegado(
@@ -90,6 +71,43 @@ def asignar_rol(db: Session, usuario_id: int, rol_id: int, autor: Usuario) -> Us
         },
     )
     auth_service.revocar_tokens_de_refresco(db, usuario.id, motivo=eventos.USUARIO_ROL_CAMBIADO)
+    return True
+
+
+def obtener_rol(db: Session, rol_id: int) -> Rol:
+    """Resolve a role by id, 404 when it does not exist."""
+    rol = usuario_repo.obtener_rol_por_id(db, rol_id)
+    if rol is None:
+        raise RecursoNoEncontrado(
+            "No encontramos ese rol. Consulta los roles disponibles antes de asignarlo.",
+            detalles=[detalle("rol_id", "El rol no existe.")],
+        )
+    return rol
+
+
+def asignar_rol(db: Session, usuario_id: int, rol_id: int, autor: Usuario) -> Usuario:
+    """Give ``usuario_id`` the role ``rol_id`` (RF-004 steps 3 and 4).
+
+    Two rules guard the change:
+
+    * flow 3a - the caller may not leave themselves without
+      ``rol:administrar``. The check is on the PERMISSION the destination role
+      grants, not on its name, so it keeps working for any role the shop
+      invents later;
+    * flow 4a - a role change invalidates the refresh tokens of the affected
+      user, so the new permissions apply on the next token instead of on the
+      next login (:func:`app.services.auth_service.revocar_tokens_de_refresco`).
+
+    Assigning the role the user already holds is a no-op: nothing is written to
+    the audit trail and no session is dropped.
+    """
+    usuario = usuario_repo.obtener_por_id(db, usuario_id)
+    if usuario is None:
+        raise RecursoNoEncontrado("No encontramos ese usuario.")
+
+    rol = obtener_rol(db, rol_id)
+    if not aplicar_rol(db, usuario, rol, autor):
+        return usuario
 
     db.commit()
     db.refresh(usuario)

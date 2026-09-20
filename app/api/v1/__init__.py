@@ -3,8 +3,12 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    admin_bahias,
     admin_roles,
     admin_servicios,
+    admin_usuarios,
+    agenda,
+    asignacion,
     auth,
     disponibilidad,
     estados,
@@ -24,11 +28,16 @@ api_router.include_router(vehiculos.router)
 api_router.include_router(servicios.router)
 api_router.include_router(admin_servicios.router)
 api_router.include_router(admin_roles.router)
+api_router.include_router(admin_usuarios.router)
+api_router.include_router(admin_bahias.router)
+api_router.include_router(agenda.router)
 api_router.include_router(disponibilidad.router)
 api_router.include_router(estados.router)
-# ``operacion`` first: it owns the literal ``/reservas/buscar``, which would
-# otherwise be swallowed by ``/reservas/{reserva_id}``.
+# ``operacion`` and ``asignacion`` first: they own the literal
+# ``/reservas/buscar``, ``/reservas/atencion-inmediata`` and ``/reservas/cola``,
+# which would otherwise be swallowed by ``/reservas/{reserva_id}``.
 api_router.include_router(operacion.router)
+api_router.include_router(asignacion.router)
 api_router.include_router(pagos.router)
 api_router.include_router(reservas.router)
 

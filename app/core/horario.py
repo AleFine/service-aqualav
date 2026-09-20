@@ -1,11 +1,21 @@
 """RN-07 opening hours, evaluated in America/Lima.
 
-Monday to Saturday 08:00-19:00, Sunday 09:00-14:00. There is no closed day in
-the MVP, so :func:`es_laborable` is always true; the function exists because
-RF-013 has to answer ``laborable`` and v0.2 may introduce holidays.
+Monday to Saturday 08:00-19:00, Sunday 09:00-14:00 - but only as the FALLBACK
+calendar. RF-018 moves the opening hours and the holidays to data
+(``horario_atencion`` and ``dia_no_laborable``), and this module stays pure:
+it never opens a session. The service layer reads the rows, builds a
+:class:`Calendario` and threads it through, exactly like the set of active
+states is resolved once and passed down to the availability algorithm.
+
+That is why :func:`es_laborable` finally means something: a date is workable
+when the calendar declares a window for its weekday AND no holiday or
+shop-wide closure covers it.
 """
 
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
+from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -21,6 +31,44 @@ DOMINGO = 6  # datetime.weekday(): Monday is 0, Sunday is 6.
 
 # Minutes between two consecutive candidate start times (RF-013 step 2).
 PASO_BLOQUE_MIN = 15
+
+#: The RN-07 week, as the seed writes it into ``horario_atencion``.
+TRAMOS_RN07: dict[int, tuple[time, time]] = {
+    **{dia: (APERTURA_SEMANA, CIERRE_SEMANA) for dia in range(DOMINGO)},
+    DOMINGO: (APERTURA_DOMINGO, CIERRE_DOMINGO),
+}
+
+
+@dataclass(frozen=True)
+class Calendario:
+    """When the shop opens, as DATA (RF-018, RN-07).
+
+    ``tramos`` maps ``datetime.weekday()`` to the ``(apertura, cierre)`` pair
+    of that weekday; a weekday with no entry is closed. ``feriados`` maps a
+    specific date to the reason it is not workable - holidays, and also the
+    shop-wide blockings that cover a whole opening window.
+    """
+
+    tramos: Mapping[int, tuple[time, time]] = field(default_factory=dict)
+    feriados: Mapping[date, str] = field(default_factory=dict)
+
+    def motivo_no_laborable(self, fecha: date) -> str | None:
+        """Why the shop does not open that date, or ``None`` when it does."""
+        motivo = self.feriados.get(fecha)
+        if motivo is not None:
+            return motivo
+        if fecha.weekday() not in self.tramos:
+            return "El local no atiende ese día de la semana."
+        return None
+
+
+#: Calendar used when no row has been read: the literal RN-07 week. It keeps
+#: every caller that does not care about holidays working unchanged, and it is
+#: what the API falls back to if ``horario_atencion`` is ever empty.
+CALENDARIO_PREDETERMINADO = Calendario(
+    tramos=MappingProxyType(dict(TRAMOS_RN07)),
+    feriados=MappingProxyType({}),
+)
 
 
 def ahora() -> datetime:
@@ -64,16 +112,21 @@ def a_lima(momento: datetime) -> datetime:
     return momento.astimezone(ZONA_LIMA)
 
 
-def ventana_del_dia(fecha: date) -> tuple[datetime, datetime] | None:
+def ventana_del_dia(
+    fecha: date,
+    calendario: Calendario = CALENDARIO_PREDETERMINADO,
+) -> tuple[datetime, datetime] | None:
     """Return the ``(apertura, cierre)`` instants for a date, or ``None`` if closed.
 
     Both ends are timezone-aware in America/Lima. The interval is treated as
     half-open ``[apertura, cierre)`` by the availability algorithm.
     """
-    if fecha.weekday() == DOMINGO:
-        apertura, cierre = APERTURA_DOMINGO, CIERRE_DOMINGO
-    else:
-        apertura, cierre = APERTURA_SEMANA, CIERRE_SEMANA
+    if calendario.motivo_no_laborable(fecha) is not None:
+        return None
+
+    apertura, cierre = calendario.tramos[fecha.weekday()]
+    if cierre <= apertura:  # pragma: no cover - guarded when the row is written
+        return None
 
     return (
         datetime.combine(fecha, apertura, tzinfo=ZONA_LIMA),
@@ -81,12 +134,20 @@ def ventana_del_dia(fecha: date) -> tuple[datetime, datetime] | None:
     )
 
 
-def es_laborable(fecha: date) -> bool:
-    """Whether the shop opens on that date."""
-    return ventana_del_dia(fecha) is not None
+def es_laborable(fecha: date, calendario: Calendario = CALENDARIO_PREDETERMINADO) -> bool:
+    """Whether the shop opens on that date (RF-018 CA-01).
+
+    Holidays and shop-wide closures travel inside ``calendario``, so this is no
+    longer the constant ``True`` the MVP left behind.
+    """
+    return calendario.motivo_no_laborable(fecha) is None
 
 
-def dentro_de_horario(inicio: datetime, fin: datetime) -> bool:
+def dentro_de_horario(
+    inicio: datetime,
+    fin: datetime,
+    calendario: Calendario = CALENDARIO_PREDETERMINADO,
+) -> bool:
     """Whether the whole ``[inicio, fin)`` interval fits in one day's window."""
     inicio_lima = a_lima(inicio)
     fin_lima = a_lima(fin)
@@ -94,7 +155,7 @@ def dentro_de_horario(inicio: datetime, fin: datetime) -> bool:
     if fin_lima <= inicio_lima:
         return False
 
-    ventana = ventana_del_dia(inicio_lima.date())
+    ventana = ventana_del_dia(inicio_lima.date(), calendario)
     if ventana is None:
         return False
 

@@ -9,18 +9,21 @@ This is the ONLY place where role names appear (contract section 3): every
 authorization decision is taken on a permission code, never on a role name.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.horario import TRAMOS_RN07
 from app.core.security import hash_password
 from app.database import SessionLocal
 from app.models import (
     Bahia,
+    EstadoBahia,
     EstadoCuenta,
     EstadoReserva,
+    HorarioAtencion,
     Permiso,
     Rol,
     Servicio,
@@ -89,6 +92,10 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
     "recepcionista": (
         "servicio:leer",
         "agenda:leer",
+        # RF-018 names BOTH the administrator and the receptionist as the
+        # actors of the agenda: the counter is who reschedules a slot when a
+        # bay breaks down, so it has to be able to block one.
+        "agenda:administrar",
         "reserva:leer_todas",
         "reserva:cancelar",
         "reserva:check_in",
@@ -253,6 +260,11 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
 #: Four bays, the physical limit of the shop (RE-07).
 BAHIAS: tuple[str, ...] = ("Bahía 1", "Bahía 2", "Bahía 3", "Bahía 4")
 
+#: RN-07 as DATA (RF-018): the opening week moves out of ``app/core/horario``
+#: and into ``horario_atencion``. The constants stay in the core module as the
+#: FALLBACK calendar, so an empty table never leaves the shop closed.
+VIGENCIA_HORARIO_INICIAL = date(2024, 1, 1)
+
 #: (nombre, descripcion, categoria, duracion_min, monto_centimos)
 SERVICIOS: tuple[tuple[str, str, str, int, int], ...] = (
     (
@@ -374,7 +386,23 @@ def _sembrar_bahias(db: Session) -> None:
     existentes = {bahia.nombre for bahia in db.scalars(select(Bahia)).all()}
     for nombre in BAHIAS:
         if nombre not in existentes:
-            db.add(Bahia(nombre=nombre, activa=True))
+            db.add(Bahia(nombre=nombre, activa=True, estado=EstadoBahia.LIBRE.value))
+    db.flush()
+
+
+def _sembrar_horarios(db: Session) -> None:
+    """Write RN-07 into ``horario_atencion``, one row per weekday."""
+    existentes = {fila.dia_semana for fila in db.scalars(select(HorarioAtencion)).all()}
+    for dia_semana, (apertura, cierre) in sorted(TRAMOS_RN07.items()):
+        if dia_semana not in existentes:
+            db.add(
+                HorarioAtencion(
+                    dia_semana=dia_semana,
+                    hora_apertura=apertura,
+                    hora_cierre=cierre,
+                    vigente_desde=VIGENCIA_HORARIO_INICIAL,
+                )
+            )
     db.flush()
 
 
@@ -462,6 +490,7 @@ def ejecutar_seed(db: Session) -> None:
     roles = _sembrar_roles(db, permisos)
     _sembrar_transiciones(db)
     _sembrar_bahias(db)
+    _sembrar_horarios(db)
     _sembrar_servicios(db)
     usuarios = _sembrar_usuarios(db, roles)
     _sembrar_vehiculo_demo(db, usuarios["cliente"])

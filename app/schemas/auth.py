@@ -1,25 +1,21 @@
 """Authentication payloads (RF-001, RF-002)."""
 
-import re
-
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.password import validar_politica
+from app.schemas.common import MENSAJE_TELEFONO, TELEFONO_REGEX, normalizar_telefono
 from app.schemas.usuario import UsuarioOut
 
-# Peruvian mobile number: 9 digits starting with 9.
-TELEFONO_REGEX = re.compile(r"^9\d{8}$")
-MENSAJE_TELEFONO = "El teléfono debe tener 9 dígitos y empezar con 9."
-
-
-def normalizar_telefono(valor: str) -> str:
-    """Strip spaces, dashes and the +51 prefix, then validate the format."""
-    limpio = re.sub(r"[\s\-()]", "", valor or "")
-    if limpio.startswith("+51"):
-        limpio = limpio[3:]
-    if not TELEFONO_REGEX.match(limpio):
-        raise ValueError(MENSAJE_TELEFONO)
-    return limpio
+__all__ = [
+    "MENSAJE_TELEFONO",
+    "TELEFONO_REGEX",
+    "LoginIn",
+    "RefreshIn",
+    "RegistroIn",
+    "TokenOut",
+    "normalizar_telefono",
+    "validar_password",
+]
 
 
 def validar_password(valor: str) -> str:

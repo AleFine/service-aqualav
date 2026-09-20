@@ -114,19 +114,88 @@ def listar_ocupacion(
     return [(fila[0], fila[1], fila[2]) for fila in db.execute(consulta).all()]
 
 
+def listar_en_rango(
+    db: Session, desde: datetime, hasta: datetime, estados_activos: Iterable[str]
+) -> list[Reserva]:
+    """Active reservations touching ``[desde, hasta)``, for the agenda (RF-018)."""
+    consulta = (
+        _completa(select(Reserva))
+        .where(
+            Reserva.estado.in_(set(estados_activos)),
+            Reserva.inicio < hasta,
+            Reserva.fin > desde,
+        )
+        .order_by(Reserva.inicio, Reserva.id)
+    )
+    return list(db.scalars(consulta).unique().all())
+
+
+def listar_activas_de_bahia(
+    db: Session,
+    bahia_id: int | None,
+    desde: datetime,
+    hasta: datetime,
+    estados_activos: Iterable[str],
+) -> list[Reserva]:
+    """Active reservations of one bay - or of every bay - inside a window.
+
+    ``bahia_id`` None means the whole shop, which is what a shop-wide blocking
+    has to check before it can be applied (RF-018 flow 4a).
+    """
+    consulta = _completa(select(Reserva)).where(
+        Reserva.estado.in_(set(estados_activos)),
+        Reserva.inicio < hasta,
+        Reserva.fin > desde,
+    )
+    if bahia_id is not None:
+        consulta = consulta.where(Reserva.bahia_id == bahia_id)
+    return list(db.scalars(consulta.order_by(Reserva.inicio, Reserva.id)).unique().all())
+
+
+def existe_activa_de_bahia(
+    db: Session, bahia_id: int, desde: datetime, estados_activos: Iterable[str]
+) -> bool:
+    """Whether a bay still has active work booked from ``desde`` onwards."""
+    consulta = select(Reserva.id).where(
+        Reserva.bahia_id == bahia_id,
+        Reserva.estado.in_(set(estados_activos)),
+        Reserva.fin >= desde,
+    )
+    return db.scalars(consulta).first() is not None
+
+
+def listar_por_ids(db: Session, reserva_ids: Iterable[int]) -> list[Reserva]:
+    """Reservations by id, keeping the caller's order."""
+    ids = list(reserva_ids)
+    if not ids:
+        return []
+    filas = {
+        fila.id: fila
+        for fila in db.scalars(_completa(select(Reserva)).where(Reserva.id.in_(ids))).unique().all()
+    }
+    return [filas[identificador] for identificador in ids if identificador in filas]
+
+
+def existe_codigo_qr(db: Session, codigo_qr: str) -> bool:
+    return db.scalars(select(Reserva.id).where(Reserva.codigo_qr == codigo_qr)).first() is not None
+
+
 def buscar_activas(
     db: Session,
     estados_activos: Iterable[str],
     *,
     codigo: str | None = None,
     placa: str | None = None,
+    codigo_qr: str | None = None,
     desde: datetime | None = None,
 ) -> list[Reserva]:
-    """Non terminal reservations matching a reservation code or a plate (RF-019)."""
+    """Non terminal reservations matching a code, a plate or a scanned QR (RF-019)."""
     consulta = _completa(select(Reserva)).where(Reserva.estado.in_(set(estados_activos)))
 
     if codigo:
         consulta = consulta.where(Reserva.codigo == codigo)
+    if codigo_qr:
+        consulta = consulta.where(Reserva.codigo_qr == codigo_qr)
     if placa:
         consulta = consulta.join(Vehiculo, Vehiculo.id == Reserva.vehiculo_id).where(
             Vehiculo.placa == placa
@@ -143,6 +212,7 @@ def crear(
     db: Session,
     *,
     codigo: str,
+    codigo_qr: str | None = None,
     usuario_id: int,
     vehiculo_id: int,
     servicio_id: int,
@@ -153,9 +223,11 @@ def crear(
     monto_centimos: int,
     moneda: str,
     modalidad_pago: str,
+    atencion_sin_reserva: bool = False,
 ) -> Reserva:
     reserva = Reserva(
         codigo=codigo,
+        codigo_qr=codigo_qr,
         usuario_id=usuario_id,
         vehiculo_id=vehiculo_id,
         servicio_id=servicio_id,
@@ -166,6 +238,7 @@ def crear(
         monto_centimos=monto_centimos,
         moneda=moneda,
         modalidad_pago=modalidad_pago,
+        atencion_sin_reserva=atencion_sin_reserva,
     )
     db.add(reserva)
     db.flush()

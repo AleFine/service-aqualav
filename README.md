@@ -116,6 +116,17 @@ En el emulador de Android, el host del PC es `10.0.2.2`.
 > de Alembic. Si olvidas `alembic upgrade head`, la API arranca pero cada
 > consulta falla.
 
+### Servicios externos simulados
+
+Todo servicio externo se alcanza por un puerto (`Protocol`) cuya
+implementación predeterminada es local, determinista y **sin red**. Cada opción
+trae un valor por defecto que funciona, así que la API arranca sin tocar
+`.env`:
+
+| Variable | Valor por defecto | Qué selecciona |
+|---|---|---|
+| `CORREO_PROVEEDOR` | `simulado` | Envío de correo (`RF-035`: la contraseña temporal). `app/services/proveedores/correo.py` registra el mensaje en el log y lo guarda en memoria para poder leerlo en una demo o en una prueba. Un valor desconocido cae en la simulación a propósito. |
+
 ---
 
 ## 4. Pruebas
@@ -209,15 +220,34 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 | `GET` | `/admin/roles` | `rol:administrar` | RF-004 | 200 · 401 · 403 |
 | `GET` | `/admin/permisos` | `rol:administrar` | RF-004 | 200 · 401 · 403 |
 | `PUT` | `/admin/usuarios/{id}/rol` | `rol:administrar` | RF-004 | 200 · 403 · 404 · **422** |
+| `GET` | `/admin/usuarios?rol_id=&estado_cuenta=` | `usuario:administrar` | RF-035 | 200 · 403 |
+| `POST` | `/admin/usuarios` | `usuario:administrar` | RF-035 | 201 · **409** · 422 |
+| `PATCH` | `/admin/usuarios/{id}` | `usuario:administrar` | RF-035 | 200 · **409** · 404 · 422 |
+| `GET` | `/admin/bahias` | `bahia:administrar` | RF-018, RF-020 | 200 · 403 |
+| `POST` | `/admin/bahias` | `bahia:administrar` | RE-07 | 201 · **409** · **422** |
+| `PATCH` | `/admin/bahias/{id}` | `bahia:administrar` | RE-07 | 200 · **409** · 404 |
+| `GET` | `/agenda?fecha=&vista=dia\|semana` | `agenda:leer` | RF-018 | 200 · 403 |
+| `GET` | `/agenda/horarios` | `agenda:leer` | RF-018, RN-07 | 200 · 403 |
+| `PUT` | `/agenda/horarios/{dia_semana}` | `agenda:administrar` | RF-018 | 200 · 403 · 422 |
+| `GET` | `/agenda/dias-no-laborables?desde=&hasta=` | `agenda:leer` | RF-018 | 200 · 403 |
+| `POST` | `/agenda/dias-no-laborables` | `agenda:administrar` | RF-018 | 201 · **409** · 422 |
+| `DELETE` | `/agenda/dias-no-laborables/{id}` | `agenda:administrar` | RF-018 | 204 · 404 |
+| `GET` | `/agenda/bloqueos?desde=&hasta=` | `agenda:leer` | RF-018 | 200 · 403 |
+| `POST` | `/agenda/bloqueos` | `agenda:administrar` | RF-018 `4a` | 201 · **409** · 422 |
+| `DELETE` | `/agenda/bloqueos/{id}` | `agenda:administrar` | RF-018 | 204 · 404 |
 | `GET` | `/estados` | autenticado | P3 | 200 |
 | `GET` | `/disponibilidad?fecha=&servicio_id=` | `disponibilidad:leer` | RF-013 | 200 · 404 |
 | `POST` | `/reservas` | `reserva:crear` | RF-014 | 201 · 404 · **409** · 422 |
 | `GET` | `/reservas?estado=&pagina=&tamanio=` | `reserva:leer_propias` o `reserva:leer_todas` | RF-017 | 200 · 403 |
 | `GET` | `/reservas/{id}` | idem | RF-017, RF-022 | 200 · 404 |
-| `GET` | `/reservas/buscar?codigo=&placa=` | `reserva:check_in` | RF-019 | 200 · 404 |
+| `GET` | `/reservas/buscar?codigo=&placa=&qr=` | `reserva:check_in` | RF-019 | 200 · 404 |
+| `POST` | `/reservas/atencion-inmediata` | `reserva:check_in` | RF-019 `1a` | 201 · **409** · 422 |
 | `POST` | `/reservas/{id}/cancelacion` | `reserva:cancelar` | RF-016 | 200 · **422** |
 | `POST` | `/reservas/{id}/check-in` | `reserva:check_in` | RF-019 | 200 · **409** · 422 |
 | `POST` | `/reservas/{id}/estado` | `reserva:avanzar_estado` | RF-021 | 200 · **422** |
+| `POST` | `/reservas/{id}/asignacion` | `reserva:asignar` | RF-020 | 200 · **409** · 422 |
+| `GET` | `/reservas/cola` | `reserva:avanzar_estado` | RF-020 `CA-02` | 200 · 403 |
+| `POST` | `/reservas/{id}/revision` | `reserva:revisar` | RF-024 `3a` | 200 · **422** |
 | `POST` | `/reservas/{id}/check-out` | `reserva:check_out` | RF-024 | 200 · **422** |
 | `POST` | `/reservas/{id}/pagos` | `pago:registrar` | RF-026 | **201 / 200** · 400 · 422 |
 | `GET` | `/api/v1/health` | público | RNF-010 | 200 |
@@ -245,6 +275,18 @@ sí mismo `rol:administrar` (`422 CAMBIO_DE_ROL_PROPIO`).
   `transicion_estado` y nunca listado en código.
 - `RN-07` — horario de atención: lunes a sábado 08:00–19:00, domingos
   09:00–14:00. El intervalo completo debe caber en la ventana del día.
+  **Desde `RF-018` el horario es un DATO**: vive en `horario_atencion`, los
+  feriados en `dia_no_laborable` y los cierres parciales en `bloqueo_franja`.
+  `app/core/horario.py` sigue siendo puro —no abre sesiones—: el servicio lee
+  las filas, arma un `Calendario` y se lo pasa. Por eso `es_laborable()` ya no
+  devuelve siempre `True`, y una franja bloqueada desaparece de la
+  disponibilidad de `RF-013` (`RF-018 CA-01`).
+- `RF-020` — al asignar, la bahía pasa a `ocupada` y el servicio entra en la
+  cola del operario. Sin bahía libre la reserva **no avanza**: queda en
+  `cola_espera` con un tiempo estimado (`2a`). Si el operario elegido ya tiene
+  trabajo, hace falta `confirmar_operario_ocupado` (`3a`). La bahía se libera
+  sola cuando la reserva llega a un estado **terminal**, que se deriva de
+  `transicion_estado`, nunca de una lista de estados.
 - `RN-09` — no se entrega un vehículo sin servicio finalizado y pago confirmado.
 - `RN-12` — soles con IGV incluido; el precio almacenado es el final.
 

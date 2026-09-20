@@ -18,10 +18,10 @@ from app.core.horario import a_utc, ahora
 from app.models import EstadoReserva, Pago, Reserva, TransicionEstado
 from tests.conftest import (
     RUTA,
+    asignar,
     avanzar_estado,
     codigo_error,
     crear_reserva,
-    forzar_estado,
     instante,
     llevar_hasta_finalizado,
     proximo_lunes,
@@ -170,7 +170,7 @@ def test_volver_de_en_lavado_a_en_recepcion_responde_422(
     """RF-021 CA-01 en su redacción v1.0: «En lavado» no vuelve a «En recepción»."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
     _check_in(api_recepcion, reserva["id"])
-    forzar_estado(db, reserva["id"], "asignado")
+    assert asignar(api_recepcion, reserva["id"]).status_code == 200
     assert avanzar_estado(api_operario, reserva["id"], "en_lavado").status_code == 200
 
     respuesta = avanzar_estado(api_operario, reserva["id"], "en_recepcion")
@@ -187,7 +187,7 @@ def test_la_cadena_de_bahia_la_recorre_el_operario(
     """Anexo A v1.0: ``asignado -> en_lavado -> secado -> acabado -> finalizado``."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
     _check_in(api_recepcion, reserva["id"])
-    forzar_estado(db, reserva["id"], "asignado")
+    assert asignar(api_recepcion, reserva["id"]).status_code == 200
 
     recorrido = []
     for estado in ("en_lavado", "secado", "acabado", "finalizado"):
@@ -206,7 +206,7 @@ def test_el_recepcionista_no_avanza_el_estado_del_servicio(
     """RF-004 v1.0: el mostrador y la bahía son dos roles distintos."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
     _check_in(api_recepcion, reserva["id"])
-    forzar_estado(db, reserva["id"], "asignado")
+    assert asignar(api_recepcion, reserva["id"]).status_code == 200
 
     respuesta = avanzar_estado(api_recepcion, reserva["id"], "en_lavado")
 
@@ -220,9 +220,7 @@ def test_cada_transicion_escribe_una_fila_de_historial(
     """RF-021 CA-02 / EXTENSION POINT P7."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
 
-    llevar_hasta_finalizado(
-        api_recepcion, api_operario, db, reserva["id"], autor_id=usuario_operario.id
-    )
+    llevar_hasta_finalizado(api_recepcion, api_operario, db, reserva["id"])
 
     cuerpo = api_operario.get(f"{RUTA}/reservas/{reserva['id']}").json()
     assert [fila["estado"] for fila in cuerpo["historial"]] == [
@@ -456,7 +454,7 @@ def test_transicion_sin_endpoint_sigue_disponible_en_estado(
     """Una transición sin dueño declarado la sigue haciendo ``POST /estado``."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
     _check_in(api_recepcion, reserva["id"])
-    forzar_estado(db, reserva["id"], "asignado")
+    assert asignar(api_recepcion, reserva["id"]).status_code == 200
 
     respuesta = avanzar_estado(api_operario, reserva["id"], "en_lavado")
 
@@ -529,7 +527,7 @@ def test_buscar_encuentra_reserva_en_estado_nuevo(
     que esté. Antes de C3 un estado nuevo era invisible en la búsqueda."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
     _check_in(api_recepcion, reserva["id"])
-    forzar_estado(db, reserva["id"], "asignado")
+    assert asignar(api_recepcion, reserva["id"]).status_code == 200
     for estado in ("en_lavado", "secado", "acabado"):
         assert avanzar_estado(api_operario, reserva["id"], estado).status_code == 200
     _declarar_encerado(db)
@@ -676,3 +674,242 @@ def test_las_observaciones_del_ingreso_solo_las_ve_el_personal(
     assert del_cliente["observaciones_ingreso"] is None
     # La conformidad es la respuesta del propio cliente: la ve todo el mundo.
     assert "conformidad_cliente" in del_cliente
+
+
+# --------------------------------------------------------------------------
+# RF-019 delta v1.0 - the QR and the walk-in customer
+# --------------------------------------------------------------------------
+def test_la_reserva_nace_con_su_codigo_qr(api_cliente, api_recepcion, servicio_medio, vehiculo_id):
+    """RF-019 v1.0: el ticket de recepción lleva un QR escaneable."""
+    reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
+
+    del_personal = api_recepcion.get(f"{RUTA}/reservas/{reserva['id']}").json()
+
+    assert del_personal["codigo_qr"].startswith("AQLQR-")
+    assert del_personal["codigo_qr"] != del_personal["codigo"], "el QR no es el código hablado"
+    # Es una credencial de escaneo: sigue la misma regla horizontal que las
+    # observaciones de ingreso.
+    assert api_cliente.get(f"{RUTA}/reservas/{reserva['id']}").json()["codigo_qr"] is None
+
+
+def test_buscar_por_qr_encuentra_la_reserva(
+    api_cliente, api_recepcion, servicio_medio, vehiculo_id
+):
+    """RF-019 delta: «búsqueda por escaneo de código QR»."""
+    reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
+    qr = api_recepcion.get(f"{RUTA}/reservas/{reserva['id']}").json()["codigo_qr"]
+
+    respuesta = api_recepcion.get(f"{RUTA}/reservas/buscar", params={"qr": qr})
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert [item["id"] for item in respuesta.json()["items"]] == [reserva["id"]]
+
+
+def test_buscar_con_un_qr_desconocido_responde_404(api_recepcion):
+    respuesta = api_recepcion.get(f"{RUTA}/reservas/buscar", params={"qr": "AQLQR-ZZZZZZZZZZZZ"})
+
+    assert respuesta.status_code == 404
+
+
+def test_la_atencion_sin_reserva_entra_directamente_en_recepcion(
+    api_recepcion, db, servicio_corto, vehiculo_id, monkeypatch
+):
+    """RF-019 flujo 1a: «el recepcionista crea una atención inmediata».
+
+    El reloj se fija a un lunes a las 10:00 para que la prueba no dependa de la
+    hora real a la que se ejecute la suite.
+    """
+    from app.services import reserva_service
+
+    momento = instante(proximo_lunes(), 10, 0)
+    monkeypatch.setattr(reserva_service, "ahora", lambda: momento)
+
+    respuesta = api_recepcion.post(
+        f"{RUTA}/reservas/atencion-inmediata",
+        json={
+            "servicio_id": servicio_corto.id,
+            "vehiculo_id": vehiculo_id,
+            "observaciones": "Llegó sin cita, pide lavado rápido",
+        },
+    )
+
+    assert respuesta.status_code == 201, respuesta.text
+    cuerpo = respuesta.json()
+    assert cuerpo["estado"] == "en_recepcion", "aterriza donde diga la tabla, como el check-in"
+    assert cuerpo["atencion_sin_reserva"] is True
+    assert cuerpo["hora_ingreso"] is not None
+    assert cuerpo["observaciones_ingreso"] == "Llegó sin cita, pide lavado rápido"
+    # La línea de tiempo se lee igual que la de una reserva agendada.
+    assert [fila["estado"] for fila in cuerpo["historial"]] == ["confirmada", "en_recepcion"]
+
+
+def test_la_atencion_sin_reserva_necesita_una_bahia_libre(
+    api_cliente, api_recepcion, db, servicio_corto, vehiculo_id, monkeypatch
+):
+    """RF-019 flujo 1a: «si hay una bahía libre»."""
+    from app.services import reserva_service
+    from tests.conftest import dejar_una_sola_bahia
+
+    dejar_una_sola_bahia(db)
+    fecha = proximo_lunes()
+    assert (
+        crear_reserva(
+            api_cliente, servicio_corto.id, vehiculo_id, instante(fecha, 10, 0)
+        ).status_code
+        == 201
+    )
+    monkeypatch.setattr(reserva_service, "ahora", lambda: instante(fecha, 10, 0))
+
+    respuesta = api_recepcion.post(
+        f"{RUTA}/reservas/atencion-inmediata",
+        json={"servicio_id": servicio_corto.id, "vehiculo_id": vehiculo_id},
+    )
+
+    assert respuesta.status_code == 409
+    assert codigo_error(respuesta) == "RESERVA_BLOQUE_OCUPADO"
+
+
+def test_la_atencion_sin_reserva_exige_el_permiso_del_mostrador(
+    api_cliente, api_operario, servicio_corto, vehiculo_id
+):
+    cuerpo = {"servicio_id": servicio_corto.id, "vehiculo_id": vehiculo_id}
+
+    assert api_cliente.post(f"{RUTA}/reservas/atencion-inmediata", json=cuerpo).status_code == 403
+    assert api_operario.post(f"{RUTA}/reservas/atencion-inmediata", json=cuerpo).status_code == 403
+
+
+# --------------------------------------------------------------------------
+# RF-024 delta v1.0 - the customer objects and the service goes back
+# --------------------------------------------------------------------------
+def _finalizada_y_pagada(api_cliente, api_recepcion, api_operario, db, servicio, vehiculo_id):
+    reserva = _reserva_confirmada(api_cliente, servicio, vehiculo_id)
+    llevar_hasta_finalizado(api_recepcion, api_operario, db, reserva["id"])
+    assert _pagar(api_recepcion, reserva["id"], 2500).status_code == 201
+    return reserva
+
+
+def test_la_observacion_del_cliente_manda_el_servicio_a_revision(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+):
+    """RF-024 flujo 3a: «el servicio pasa a "En revisión"»."""
+    reserva = _finalizada_y_pagada(
+        api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+    )
+
+    respuesta = api_recepcion.post(
+        f"{RUTA}/reservas/{reserva['id']}/revision",
+        json={"observacion": "Quedaron restos de cera en el parabrisas"},
+    )
+
+    assert respuesta.status_code == 200, respuesta.text
+    cuerpo = respuesta.json()
+    assert cuerpo["estado"] == "en_revision"
+    assert cuerpo["observacion_revision"] == "Quedaron restos de cera en el parabrisas"
+    assert cuerpo["conformidad_cliente"] is False
+    assert cuerpo["historial"][-1]["estado"] == "en_revision"
+    assert cuerpo["hora_entrega"] is None, "el vehículo no salió del local"
+
+
+def test_desde_en_revision_el_operario_reprocesa(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+):
+    """Anexo A v1.0: ``en_revision -> acabado`` lo hace el genérico (RF-021)."""
+    reserva = _finalizada_y_pagada(
+        api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+    )
+    api_recepcion.post(
+        f"{RUTA}/reservas/{reserva['id']}/revision", json={"observacion": "Falta secar"}
+    )
+
+    respuesta = avanzar_estado(api_operario, reserva["id"], "acabado")
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["estado"] == "acabado"
+    assert avanzar_estado(api_operario, reserva["id"], "finalizado").status_code == 200
+
+
+def test_desde_en_revision_se_puede_entregar(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+):
+    """Anexo A v1.0: ``en_revision -> entregado``. El check-out no ramifica."""
+    reserva = _finalizada_y_pagada(
+        api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+    )
+    api_recepcion.post(
+        f"{RUTA}/reservas/{reserva['id']}/revision", json={"observacion": "Una mancha"}
+    )
+
+    respuesta = api_recepcion.post(
+        f"{RUTA}/reservas/{reserva['id']}/check-out", json={"conformidad_cliente": True}
+    )
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["estado"] == "entregado"
+    assert respuesta.json()["hora_entrega"] is not None
+
+
+def test_la_revision_exige_una_observacion(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+):
+    reserva = _finalizada_y_pagada(
+        api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+    )
+
+    respuesta = api_recepcion.post(
+        f"{RUTA}/reservas/{reserva['id']}/revision", json={"observacion": "   "}
+    )
+
+    assert respuesta.status_code == 422
+    assert codigo_error(respuesta) == "VALIDACION"
+
+
+def test_la_revision_de_un_servicio_no_terminado_responde_422(
+    api_cliente, api_recepcion, servicio_medio, vehiculo_id
+):
+    reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
+
+    respuesta = api_recepcion.post(
+        f"{RUTA}/reservas/{reserva['id']}/revision", json={"observacion": "Algo"}
+    )
+
+    assert respuesta.status_code == 422
+    assert codigo_error(respuesta) == "TRANSICION_INVALIDA"
+
+
+def test_el_operario_no_puede_enviar_a_revision(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+):
+    """La observación es del cliente y la recoge el mostrador (RF-024 3a)."""
+    reserva = _finalizada_y_pagada(
+        api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+    )
+
+    respuesta = api_operario.post(
+        f"{RUTA}/reservas/{reserva['id']}/revision", json={"observacion": "Algo"}
+    )
+
+    assert respuesta.status_code == 403
+
+
+def test_la_entrega_registra_el_gancho_de_calificacion(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+):
+    """RF-024 paso 4: «habilita la calificación». INC-6 leerá este evento."""
+    from app.models import EventoDominio
+
+    reserva = _finalizada_y_pagada(
+        api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+    )
+    api_recepcion.post(
+        f"{RUTA}/reservas/{reserva['id']}/check-out", json={"conformidad_cliente": True}
+    )
+
+    evento = db.scalars(
+        select(EventoDominio).where(
+            EventoDominio.accion == "reserva.calificacion_habilitada",
+            EventoDominio.entidad_id == reserva["id"],
+        )
+    ).first()
+
+    assert evento is not None
+    assert evento.datos["habilitada_en"]

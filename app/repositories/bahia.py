@@ -26,3 +26,23 @@ def listar_activas_bloqueadas(db: Session) -> list[Bahia]:
 
 def contar_activas(db: Session) -> int:
     return len(listar_activas(db))
+
+
+def listar_todas(db: Session) -> list[Bahia]:
+    """Every bay, active or not: the administration screen sees them all."""
+    return list(db.scalars(select(Bahia).order_by(Bahia.id)).all())
+
+
+def obtener_por_id(db: Session, bahia_id: int) -> Bahia | None:
+    return db.scalars(select(Bahia).where(Bahia.id == bahia_id)).first()
+
+
+def obtener_por_nombre(db: Session, nombre: str) -> Bahia | None:
+    return db.scalars(select(Bahia).where(Bahia.nombre == nombre)).first()
+
+
+def crear(db: Session, *, nombre: str, activa: bool, estado: str) -> Bahia:
+    bahia = Bahia(nombre=nombre, activa=activa, estado=estado)
+    db.add(bahia)
+    db.flush()
+    return bahia

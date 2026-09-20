@@ -1,9 +1,9 @@
 """Data access for ``usuario``, ``rol`` and ``permiso``."""
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.models import Permiso, Rol, Usuario
+from app.models import Permiso, Rol, RolPermiso, Usuario
 
 
 def obtener_por_id(db: Session, usuario_id: int) -> Usuario | None:
@@ -60,6 +60,54 @@ def listar_permisos(db: Session) -> list[Permiso]:
     return list(db.scalars(select(Permiso).order_by(Permiso.codigo)).all())
 
 
+def listar_paginado(
+    db: Session,
+    *,
+    rol_id: int | None = None,
+    estado_cuenta: str | None = None,
+    pagina: int,
+    tamanio: int,
+) -> tuple[list[Usuario], int]:
+    """One page of accounts for the administration screen (RF-035)."""
+    filtros = []
+    if rol_id is not None:
+        filtros.append(Usuario.rol_id == rol_id)
+    if estado_cuenta is not None:
+        filtros.append(Usuario.estado_cuenta == estado_cuenta)
+
+    total = db.scalar(select(func.count(Usuario.id)).where(*filtros)) or 0
+    consulta = (
+        select(Usuario)
+        .where(*filtros)
+        .options(selectinload(Usuario.rol).selectinload(Rol.permisos))
+        .options(joinedload(Usuario.bahia_habitual))
+        .order_by(Usuario.id)
+        .limit(tamanio)
+        .offset((pagina - 1) * tamanio)
+    )
+    return list(db.scalars(consulta).unique().all()), total
+
+
+def listar_con_permiso(db: Session, codigo_permiso: str) -> list[Usuario]:
+    """Accounts whose role grants a permission CODE (principle P5).
+
+    RF-020 needs "the operators": it resolves them by the permission that makes
+    somebody an operator (``reserva:avanzar_estado``), never by a role name, so
+    a shop that invents a new role gets its people suggested for free.
+    """
+    consulta = (
+        select(Usuario)
+        .join(Rol, Rol.id == Usuario.rol_id)
+        .join(RolPermiso, RolPermiso.rol_id == Rol.id)
+        .join(Permiso, Permiso.id == RolPermiso.permiso_id)
+        .where(Permiso.codigo == codigo_permiso)
+        .options(selectinload(Usuario.rol).selectinload(Rol.permisos))
+        .options(joinedload(Usuario.bahia_habitual))
+        .order_by(Usuario.id)
+    )
+    return list(db.scalars(consulta).unique().all())
+
+
 def crear(
     db: Session,
     *,
@@ -70,6 +118,7 @@ def crear(
     hash_password: str,
     rol_id: int,
     estado_cuenta: str,
+    bahia_habitual_id: int | None = None,
 ) -> Usuario:
     """Insert a user. The password arrives already hashed."""
     usuario = Usuario(
@@ -80,6 +129,7 @@ def crear(
         hash_password=hash_password,
         rol_id=rol_id,
         estado_cuenta=estado_cuenta,
+        bahia_habitual_id=bahia_habitual_id,
         intentos_fallidos=0,
     )
     db.add(usuario)

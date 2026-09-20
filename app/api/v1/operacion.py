@@ -1,17 +1,26 @@
-"""Counter operation: search, check-in, state change and check-out.
+"""Counter operation: search, check-in, state change, review and check-out.
 
 RF-019, RF-021 and RF-024. These routes share the ``/reservas`` prefix with
-``reservas.py``; ``/reservas/buscar`` is declared in this module and the
-aggregator includes it FIRST so the literal path is matched before
-``/reservas/{reserva_id}``.
+``reservas.py``; ``/reservas/buscar`` and ``/reservas/atencion-inmediata`` are
+declared in this module and the aggregator includes it FIRST so the literal
+paths are matched before ``/reservas/{reserva_id}``.
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.deps import get_db, permisos_actuales, requiere_permiso
 from app.models import Usuario
-from app.schemas import CambioEstadoIn, CheckInIn, CheckOutIn, ErrorBody, Lista, ReservaOut
+from app.schemas import (
+    AtencionInmediataIn,
+    CambioEstadoIn,
+    CheckInIn,
+    CheckOutIn,
+    ErrorBody,
+    Lista,
+    ReservaOut,
+    RevisionIn,
+)
 from app.services import operacion_service, reserva_service
 from app.services.ensamblador import armar_reserva, armar_reservas
 
@@ -35,12 +44,30 @@ RESPUESTAS = {
 def buscar(
     codigo: str | None = Query(default=None, description="Código AQL-XXXXXX."),
     placa: str | None = Query(default=None, description="Placa del vehículo."),
+    qr: str | None = Query(default=None, description="Token leído del código QR."),
     _: Usuario = Depends(requiere_permiso("reserva:check_in")),
     permisos: list[str] = Depends(permisos_actuales),
     db: Session = Depends(get_db),
 ) -> Lista[ReservaOut]:
-    reservas = operacion_service.buscar(db, codigo=codigo, placa=placa)
+    reservas = operacion_service.buscar(db, codigo=codigo, placa=placa, qr=qr)
     return Lista[ReservaOut](items=armar_reservas(db, reservas, permisos))
+
+
+@router.post(
+    "/atencion-inmediata",
+    response_model=ReservaOut,
+    status_code=status.HTTP_201_CREATED,
+    responses=RESPUESTAS,
+    summary="Abrir una atención para un cliente que llegó sin reserva",
+)
+def atencion_inmediata(
+    datos: AtencionInmediataIn,
+    autor: Usuario = Depends(requiere_permiso("reserva:check_in")),
+    permisos: list[str] = Depends(permisos_actuales),
+    db: Session = Depends(get_db),
+) -> ReservaOut:
+    reserva = reserva_service.atencion_inmediata(db, datos, autor, permisos)
+    return armar_reserva(db, reserva, permisos)
 
 
 @router.post(
@@ -76,6 +103,24 @@ def cambiar_estado(
 ) -> ReservaOut:
     reserva = reserva_service.obtener(db, reserva_id, autor, permisos)
     reserva = operacion_service.cambiar_estado(db, reserva, datos.estado, autor, permisos)
+    return armar_reserva(db, reserva, permisos)
+
+
+@router.post(
+    "/{reserva_id}/revision",
+    response_model=ReservaOut,
+    responses=RESPUESTAS,
+    summary="Registrar la observación del cliente y enviar el servicio a revisión",
+)
+def revision(
+    reserva_id: int,
+    datos: RevisionIn,
+    autor: Usuario = Depends(requiere_permiso("reserva:revisar")),
+    permisos: list[str] = Depends(permisos_actuales),
+    db: Session = Depends(get_db),
+) -> ReservaOut:
+    reserva = reserva_service.obtener(db, reserva_id, autor, permisos)
+    reserva = operacion_service.enviar_a_revision(db, reserva, datos, autor, permisos)
     return armar_reserva(db, reserva, permisos)
 
 
