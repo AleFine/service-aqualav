@@ -1,0 +1,120 @@
+"""Reservation payloads (RF-014, RF-016, RF-017, RF-019, RF-021, RF-022, RF-024)."""
+
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.schemas.common import Dinero, nombre_de_autor
+from app.schemas.pago import PagoOut
+from app.schemas.servicio import ServicioResumen
+from app.schemas.usuario import ClienteResumen
+from app.schemas.vehiculo import VehiculoResumen
+
+
+class BahiaResumen(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nombre: str
+
+
+class HistorialItem(BaseModel):
+    """One row of ``reserva_estado_historial`` as the timeline renders it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    # Plain str on purpose: the set of valid states lives in transicion_estado,
+    # not in a Python enum (principle P3 / RF-021 CA-03).
+    estado: str
+    ocurrido_en: datetime
+    autor: str | None = None
+
+    @field_validator("autor", mode="before")
+    @classmethod
+    def _autor(cls, valor: object) -> object:
+        return nombre_de_autor(valor)
+
+
+class CancelacionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    motivo: str | None = None
+    cancelada_en: datetime | None = None
+    autor: str | None = None
+
+    @field_validator("autor", mode="before")
+    @classmethod
+    def _autor(cls, valor: object) -> object:
+        return nombre_de_autor(valor)
+
+
+class ReservaCrear(BaseModel):
+    """``fin`` is computed server side from the service duration."""
+
+    servicio_id: int
+    vehiculo_id: int
+    inicio: datetime
+
+
+class CancelacionIn(BaseModel):
+    motivo: str = Field(min_length=1, max_length=300)
+
+    @field_validator("motivo")
+    @classmethod
+    def _motivo(cls, valor: str) -> str:
+        limpio = valor.strip()
+        if not limpio:
+            raise ValueError("Indica el motivo de la cancelación.")
+        return limpio
+
+
+class CheckInIn(BaseModel):
+    observaciones: str | None = Field(default=None, max_length=500)
+    # The app re-sends with true after a RETRASO_REQUIERE_CONFIRMACION reply.
+    confirmar_retraso: bool = False
+
+
+class CambioEstadoIn(BaseModel):
+    # Validated against transicion_estado by the service, never against an enum,
+    # so inserting a state row is enough to enable it (RF-021 CA-03).
+    estado: str = Field(min_length=1, max_length=30)
+
+
+class CheckOutIn(BaseModel):
+    conformidad_cliente: bool
+
+
+class ReservaOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    codigo: str
+    estado: str
+    inicio: datetime
+    fin: datetime
+    creada_en: datetime
+    monto: Dinero
+    modalidad_pago: str
+    servicio: ServicioResumen
+    vehiculo: VehiculoResumen
+    bahia: BahiaResumen
+    cliente: ClienteResumen
+    # Read from transicion_estado and filtered by the caller's permissions:
+    # the mobile app renders its action buttons from this array.
+    transiciones_permitidas: list[str] = Field(default_factory=list)
+    hora_ingreso: datetime | None = None
+    hora_fin_real: datetime | None = None
+    hora_entrega: datetime | None = None
+    fin_estimado: datetime
+    # Written at check-in (RF-019). An internal shop note about the state the
+    # vehicle arrived in, so it only reaches a caller holding
+    # ``reserva:leer_todas``; a customer never sees it.
+    observaciones_ingreso: str | None = None
+    # Written at check-out (RF-024). Visible to everyone: it is the customer's
+    # own answer, and they are entitled to see what was recorded.
+    conformidad_cliente: bool | None = None
+    cancelacion: CancelacionOut | None = None
+    pago: PagoOut | None = None
+    historial: list[HistorialItem] = Field(default_factory=list)
+    # Only present on the cancellation response (always zero in the MVP).
+    penalidad: Dinero | None = None

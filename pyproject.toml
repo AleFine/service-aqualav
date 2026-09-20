@@ -1,0 +1,39 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", "migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom: Depends()/Query()/... in a default
+# argument is intended, not a mutable default. Without this, B008 fires on
+# every endpoint signature.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Header",
+    "fastapi.Body",
+    "fastapi.File",
+    "fastapi.Form",
+    # Same idiom, one level up: these are OUR dependency factories. Calling them
+    # at import time is the point (a typo in a permission code fails on start,
+    # see tests/test_rbac.py) and the closure they return holds no state.
+    "app.deps.requiere_permiso",
+    "app.deps.requiere_algun_permiso",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+extend-exclude = "/(\\.venv|migrations/versions)/"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+# The project is not installed as a package: put the repository root on
+# sys.path so "import app" works with a plain "pytest" invocation.
+pythonpath = ["."]
+addopts = "-q"
