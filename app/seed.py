@@ -34,6 +34,7 @@ from app.models import (
     ServicioAdicional,
     ServicioPrecio,
     TipoDescuento,
+    TipoDocumento,
     TipoVehiculo,
     TransicionEstado,
     Usuario,
@@ -48,6 +49,9 @@ from app.models import (
 PERMISOS: dict[str, str] = {
     "vehiculo:leer": "Consultar los vehículos visibles para el usuario.",
     "vehiculo:crear": "Registrar un vehículo.",
+    "vehiculo:editar": "Editar los datos de un vehículo propio.",
+    "vehiculo:eliminar": "Dar de baja un vehículo propio.",
+    "vehiculo:verificar": "Verificar que la placa del vehículo corresponde (RN-01).",
     "servicio:leer": "Consultar el catálogo de servicios activos.",
     "servicio:administrar": "Crear, editar y desactivar servicios y sus precios.",
     "disponibilidad:leer": "Consultar los bloques horarios disponibles.",
@@ -89,6 +93,8 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
     "cliente": (
         "vehiculo:leer",
         "vehiculo:crear",
+        "vehiculo:editar",
+        "vehiculo:eliminar",
         "servicio:leer",
         "disponibilidad:leer",
         "reserva:crear",
@@ -99,6 +105,8 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
     # back. It does NOT advance the service inside the bay.
     "recepcionista": (
         "servicio:leer",
+        # RN-01 v1.0: verifying a vehicle is the counter looking at the plate.
+        "vehiculo:verificar",
         "agenda:leer",
         # RF-018 names BOTH the administrator and the receptionist as the
         # actors of the agenda: the counter is who reschedules a slot when a
@@ -312,12 +320,14 @@ SERVICIOS: tuple[tuple[str, str, str, int, int], ...] = (
     ),
 )
 
-#: (nombres, apellidos, telefono, rol, prefijo de las credenciales en settings)
-USUARIOS_DEMO: tuple[tuple[str, str, str, str, str], ...] = (
-    ("Carla", "Quispe", "987000001", "administrador", "seed_admin"),
-    ("Luis", "Ramos", "987000002", "recepcionista", "seed_recepcion"),
-    ("Marco", "Huamán", "987000004", "operario", "seed_operario"),
-    ("Ana", "Torres", "987000003", "cliente", "seed_cliente"),
+#: (nombres, apellidos, telefono, documento, rol, prefijo en settings)
+#: RF-001 v1.0 captures the identity document, so the demo accounts carry one
+#: too: without it the uniqueness rule would never be exercised in a demo.
+USUARIOS_DEMO: tuple[tuple[str, str, str, str, str, str], ...] = (
+    ("Carla", "Quispe", "987000001", "40000001", "administrador", "seed_admin"),
+    ("Luis", "Ramos", "987000002", "40000002", "recepcionista", "seed_recepcion"),
+    ("Marco", "Huamán", "987000004", "40000004", "operario", "seed_operario"),
+    ("Ana", "Torres", "987000003", "40000003", "cliente", "seed_cliente"),
 )
 
 #: (nombre del servicio o None para el factor global, tipo de vehículo, milésimas)
@@ -394,7 +404,9 @@ def promociones_demo(hoy: date) -> tuple[dict, ...]:
     )
 
 
-#: Demo vehicle attached to the demo customer.
+#: Demo vehicle attached to the demo customer. It arrives VERIFIED (RN-01):
+#: the shop has seen this car, which is what lets a demo turn
+#: ``EXIGIR_VEHICULO_VERIFICADO`` on and still book with it.
 VEHICULO_DEMO = {
     "placa": "ABC-123",
     "tipo": "sedan",
@@ -643,7 +655,7 @@ def _credenciales_demo(clave: str) -> tuple[str, str]:
 def _sembrar_usuarios(db: Session, roles: dict[str, Rol]) -> dict[str, Usuario]:
     creados: dict[str, Usuario] = {}
 
-    for nombres, apellidos, telefono, nombre_rol, clave in USUARIOS_DEMO:
+    for nombres, apellidos, telefono, documento, nombre_rol, clave in USUARIOS_DEMO:
         correo, password = _credenciales_demo(clave)
         usuario = db.scalars(select(Usuario).where(Usuario.correo == correo)).first()
         if usuario is None:
@@ -652,9 +664,14 @@ def _sembrar_usuarios(db: Session, roles: dict[str, Rol]) -> dict[str, Usuario]:
                 apellidos=apellidos,
                 correo=correo,
                 telefono=telefono,
+                tipo_documento=TipoDocumento.DNI.value,
+                numero_documento=documento,
                 hash_password=hash_password(password),
                 rol_id=roles[nombre_rol].id,
+                # The demo accounts are created BY the shop, not self
+                # registered: there is nobody to click a verification link.
                 estado_cuenta=EstadoCuenta.ACTIVA.value,
+                consentimiento_privacidad_en=datetime.now(UTC),
                 intentos_fallidos=0,
             )
             db.add(usuario)
@@ -672,7 +689,15 @@ def _sembrar_vehiculo_demo(db: Session, cliente: Usuario) -> None:
         )
     ).first()
     if existente is None:
-        db.add(Vehiculo(usuario_id=cliente.id, activo=True, **VEHICULO_DEMO))
+        db.add(
+            Vehiculo(
+                usuario_id=cliente.id,
+                activo=True,
+                verificado=True,
+                verificado_en=datetime.now(UTC),
+                **VEHICULO_DEMO,
+            )
+        )
     db.flush()
 
 

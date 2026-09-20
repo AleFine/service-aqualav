@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import NoAutenticado, PermisoDenegado, detalle
 from app.core.security import TIPO_ACCESO, decodificar_token
 from app.database import get_db
-from app.models import EstadoCuenta, Usuario
+from app.models import ESTADOS_CUENTA_CON_ACCESO, Usuario
 from app.repositories import usuario as usuario_repo
 from app.seed import PERMISOS
 
@@ -43,7 +43,9 @@ def usuario_actual(
     """Resolve the caller from the access token (RF-004 flow 1-2).
 
     A missing, malformed, expired or wrong-type token is a 401; so is a token
-    whose user no longer exists or whose account is not active.
+    whose user no longer exists or whose account may no longer be used. An
+    account still pending verification MAY be used: see
+    ``ESTADOS_CUENTA_CON_ACCESO`` for why RF-001 flow 5a demands it.
     """
     if credenciales is None or not credenciales.credentials:
         raise NoAutenticado("Necesitas iniciar sesión para acceder a este recurso.")
@@ -53,7 +55,7 @@ def usuario_actual(
         raise NoAutenticado()
 
     usuario = usuario_repo.obtener_por_id(db, payload.usuario_id)
-    if usuario is None or usuario.estado_cuenta != EstadoCuenta.ACTIVA.value:
+    if usuario is None or usuario.estado_cuenta not in ESTADOS_CUENTA_CON_ACCESO:
         raise NoAutenticado()
 
     return usuario

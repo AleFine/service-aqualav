@@ -6,18 +6,27 @@ which is what Alembic's ``env.py`` and the seed rely on.
 
 from app.models.agenda import BloqueoFranja, DiaNoLaborable, HorarioAtencion
 from app.models.asignacion import AsignacionServicio, ColaEspera
+from app.models.autenticacion import (
+    IntentoLogin,
+    TokenRecuperacion,
+    TokenRefresco,
+    VerificacionCorreo,
+)
 from app.models.bahia import MAXIMO_BAHIAS, Bahia
 from app.models.enums import (
+    ESTADOS_CUENTA_CON_ACCESO,
     FACTOR_BASE_MILESIMAS,
     MONEDA_PREDETERMINADA,
     EstadoBahia,
     EstadoCuenta,
     EstadoPago,
     EstadoReserva,
+    Idioma,
     MedioPago,
     ModalidadPago,
     MotivoBloqueo,
     TipoDescuento,
+    TipoDocumento,
     TipoVehiculo,
 )
 from app.models.evento import EventoDominio
@@ -38,6 +47,7 @@ from app.models.usuario import Usuario
 from app.models.vehiculo import Vehiculo
 
 __all__ = [
+    "ESTADOS_CUENTA_CON_ACCESO",
     "FACTOR_BASE_MILESIMAS",
     "MAXIMO_BAHIAS",
     "MONEDA_PREDETERMINADA",
@@ -53,6 +63,8 @@ __all__ = [
     "EventoDominio",
     "FactorTipoVehiculo",
     "HorarioAtencion",
+    "Idioma",
+    "IntentoLogin",
     "MedioPago",
     "ModalidadPago",
     "MotivoBloqueo",
@@ -71,8 +83,12 @@ __all__ = [
     "ServicioAdicional",
     "ServicioPrecio",
     "TipoDescuento",
+    "TipoDocumento",
     "TipoVehiculo",
+    "TokenRecuperacion",
+    "TokenRefresco",
     "TransicionEstado",
     "Usuario",
     "Vehiculo",
+    "VerificacionCorreo",
 ]

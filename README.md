@@ -125,7 +125,17 @@ trae un valor por defecto que funciona, así que la API arranca sin tocar
 
 | Variable | Valor por defecto | Qué selecciona |
 |---|---|---|
-| `CORREO_PROVEEDOR` | `simulado` | Envío de correo (`RF-035`: la contraseña temporal). `app/services/proveedores/correo.py` registra el mensaje en el log y lo guarda en memoria para poder leerlo en una demo o en una prueba. Un valor desconocido cae en la simulación a propósito. |
+| `CORREO_PROVEEDOR` | `simulado` | Envío de correo (`RF-035`: la contraseña temporal; `RF-001`/`RF-003`/`RF-006`: verificación y recuperación). `app/services/proveedores/correo.py` registra el mensaje en el log y lo guarda en memoria para poder leerlo en una demo o en una prueba. Un valor desconocido cae en la simulación a propósito. |
+
+Y estas tres, que no seleccionan un proveedor sino que afinan reglas de
+`INC-3`:
+
+| Variable | Valor por defecto | Qué controla |
+|---|---|---|
+| `VERIFICACION_CORREO_EXPIRA_HORAS` | `24` | Vigencia del enlace de verificación de `RF-001`. No es una credencial, así que una ventana amplia ahorra reenvíos. |
+| `RECUPERACION_EXPIRA_MINUTOS` | `30` | Vigencia del enlace de `RF-003`. **El requisito dice 30 literalmente** (`CA-02`): es una variable para poder acortarla en una demo, nunca para relajarla. |
+| `URL_BASE_APP` | `https://aqualav.pe/app` | Prefijo del enlace que arma el correo simulado. |
+| `EXIGIR_VEHICULO_VERIFICADO` | `false` | `RN-01` v1.0 pide un vehículo «registrado **y verificado**». La regla está implementada (`vehiculo.verificado` + `POST /vehiculos/{id}/verificacion`) y el interruptor viene **apagado**: ningún requisito describe cómo se verifica un vehículo antes de su primera visita, así que exigirlo de fábrica dejaría a un cliente nuevo sin poder reservar la cita que permitiría al mostrador verificar su auto. |
 
 ---
 
@@ -214,10 +224,20 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 |---|---|---|---|---|
 | `POST` | `/auth/registro` | público | RF-001 | 201 · 409 · 422 |
 | `POST` | `/auth/login` | público | RF-002 | 200 · 401 · 429 |
-| `POST` | `/auth/refresh` | público | RF-002 | 200 · 401 |
+| `POST` | `/auth/refresh` | público | RF-002, RF-005 | 200 · 401 |
+| `POST` | `/auth/logout` | público | RF-005 `CA-01` | 200 |
+| `POST` | `/auth/verificacion` | público | RF-001, RF-006 `3a` | 200 · **400** |
+| `POST` | `/auth/verificacion/reenviar` | público | RF-001 `5a`, RF-002 `2c` | 200 |
+| `POST` | `/auth/password/recuperacion` | público | RF-003 `2a` | 200 |
+| `POST` | `/auth/password/restablecer` | público | RF-003 `CA-01`, `CA-02` | 200 · **400** · 422 |
 | `GET` | `/auth/yo` | autenticado | RF-002 | 200 · 401 |
-| `GET` | `/vehiculos` | `vehiculo:leer` | RF-007 | 200 · 401 · 403 |
+| `GET` | `/perfil` | autenticado | RF-006 | 200 · 401 |
+| `PATCH` | `/perfil` | autenticado | RF-006 `CA-01`, `CA-02` | 200 · 401 · 409 · 422 |
+| `GET` | `/vehiculos?incluir_inactivos=` | `vehiculo:leer` | RF-007, RF-008 `CA-02` | 200 · 401 · 403 |
 | `POST` | `/vehiculos` | `vehiculo:crear` | RF-007 | 201 · 409 · 422 |
+| `PATCH` | `/vehiculos/{id}` | `vehiculo:editar` | RF-008 | 200 · 404 · 409 · 422 |
+| `DELETE` | `/vehiculos/{id}` | `vehiculo:eliminar` | RF-008 `CA-01`, `3a` | 200 · 404 · **409** |
+| `POST` | `/vehiculos/{id}/verificacion` | `vehiculo:verificar` | RN-01 | 200 · 403 · 404 |
 | `GET` | `/servicios?vehiculo_id=&tipo_vehiculo=` | `servicio:leer` | RF-009 | 200 · 401 · 403 · 404 |
 | `GET` | `/servicios/{id}?vehiculo_id=&tipo_vehiculo=` | `servicio:leer` | RF-009 `CA-02` | 200 · 404 |
 | `GET` | `/paquetes` | `servicio:leer` | RF-011 | 200 · 403 |

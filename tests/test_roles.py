@@ -200,6 +200,8 @@ def test_el_registro_publico_sigue_creando_clientes(cliente_http, db):
             "apellidos": "Cliente",
             "correo": "nuevo.cliente@aqualav.pe",
             "telefono": "987111222",
+            "tipo_documento": "dni",
+            "numero_documento": "72222333",
             "password": "Secreta1234",
             "acepta_politica": True,
         },

@@ -200,6 +200,8 @@ def test_un_cliente_no_ve_las_reservas_de_otro(
             "apellidos": "Ruiz",
             "correo": "beto@example.com",
             "telefono": "987111222",
+            "tipo_documento": "dni",
+            "numero_documento": "71111222",
             "password": "Aqua1234",
             "acepta_politica": True,
         },

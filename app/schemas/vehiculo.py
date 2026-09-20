@@ -22,6 +22,14 @@ def normalizar_placa(valor: str) -> str:
     return limpia
 
 
+def _validar_anio(valor: int) -> int:
+    """Between 1950 and next year's models, which are already on sale."""
+    maximo = date.today().year + 1
+    if valor < ANIO_MINIMO or valor > maximo:
+        raise ValueError(f"El año debe estar entre {ANIO_MINIMO} y {maximo}.")
+    return valor
+
+
 class VehiculoIn(BaseModel):
     placa: str = Field(max_length=10)
     tipo: TipoVehiculo
@@ -43,10 +51,38 @@ class VehiculoIn(BaseModel):
     @field_validator("anio")
     @classmethod
     def _anio(cls, valor: int) -> int:
-        maximo = date.today().year + 1
-        if valor < ANIO_MINIMO or valor > maximo:
-            raise ValueError(f"El año debe estar entre {ANIO_MINIMO} y {maximo}.")
-        return valor
+        return _validar_anio(valor)
+
+
+class VehiculoActualizar(BaseModel):
+    """Body of ``PATCH /vehiculos/{id}`` (RF-008).
+
+    Every field optional, the plate included: a customer who mistyped it when
+    registering has no other way to fix it, and the uniqueness check ignores
+    the vehicle being edited so saving without changing the plate works.
+    """
+
+    placa: str | None = Field(default=None, max_length=10)
+    tipo: TipoVehiculo | None = None
+    marca: str | None = Field(default=None, min_length=1, max_length=60)
+    modelo: str | None = Field(default=None, min_length=1, max_length=60)
+    color: str | None = Field(default=None, min_length=1, max_length=40)
+    anio: int | None = None
+
+    @field_validator("placa")
+    @classmethod
+    def _placa(cls, valor: str | None) -> str | None:
+        return None if valor is None else normalizar_placa(valor)
+
+    @field_validator("marca", "modelo", "color")
+    @classmethod
+    def _limpiar(cls, valor: str | None) -> str | None:
+        return valor.strip() if valor is not None else None
+
+    @field_validator("anio")
+    @classmethod
+    def _anio(cls, valor: int | None) -> int | None:
+        return None if valor is None else _validar_anio(valor)
 
 
 class VehiculoOut(BaseModel):
@@ -60,6 +96,9 @@ class VehiculoOut(BaseModel):
     color: str
     anio: int
     activo: bool
+    #: RN-01 v1.0: the counter confirmed the plate on the card is the plate on
+    #: the car. See ``settings.exigir_vehiculo_verificado``.
+    verificado: bool = False
 
 
 class VehiculoResumen(BaseModel):

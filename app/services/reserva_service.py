@@ -9,12 +9,14 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.core.codigos import generar_codigo_qr, generar_codigo_reserva
 from app.core.errors import (
     RecursoNoEncontrado,
     ReservaAnticipacionInsuficiente,
     ReservaBloqueOcupado,
     ReservaFueraDeHorario,
+    VehiculoNoVerificado,
     detalle,
 )
 from app.core.horario import a_lima, a_utc, ahora, ahora_utc, dentro_de_horario, desde_bd
@@ -94,6 +96,24 @@ def crear(
         raise RecursoNoEncontrado(
             "No encontramos ese vehículo en tu cuenta. Regístralo antes de reservar.",
             detalles=[detalle("vehiculo_id", "El vehículo no pertenece a tu cuenta.")],
+        )
+
+    if not vehiculo.activo:
+        # RF-008: the deletion is logical, so the vehicle is still readable in
+        # the history (CA-02) and still refuses to take a NEW booking.
+        raise RecursoNoEncontrado(
+            "Ese vehículo está dado de baja. Regístralo otra vez para reservar con él.",
+            detalles=[detalle("vehiculo_id", "El vehículo está dado de baja.")],
+        )
+
+    if settings.exigir_vehiculo_verificado and not vehiculo.verificado:
+        # RN-01 v1.0 reads "registered AND VERIFIED". The rule is implemented
+        # here and shipped OFF (see the setting): no requirement says how a
+        # vehicle gets verified before its first visit, and demanding it would
+        # mean a new customer cannot book the appointment that would let the
+        # counter verify their car.
+        raise VehiculoNoVerificado(
+            detalles=[detalle("vehiculo_id", "Recepción debe verificar el vehículo.")]
         )
 
     inicio_lima = a_lima(datos.inicio)

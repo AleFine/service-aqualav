@@ -79,15 +79,53 @@ class TipoDescuento(str, Enum):
     MONTO = "monto"
 
 
-class EstadoCuenta(str, Enum):
-    """EXTENSION POINT: v0.2 adds ``pendiente_verificacion``.
+class TipoDocumento(str, Enum):
+    """Identity document RF-001 v1.0 captures together with its number."""
 
-    ``suspendida`` is what RF-035 writes when the administrator deactivates an
-    internal account: the login answers 403 from then on (CA-01).
+    DNI = "dni"
+    CARNE_EXTRANJERIA = "carne_extranjeria"
+    PASAPORTE = "pasaporte"
+
+
+class Idioma(str, Enum):
+    """Language the customer wants to be written to in (RF-006).
+
+    RF-029 composes every notification "from a template according to the event
+    and the LANGUAGE", so the preference has to exist before INC-5 can read it.
+    """
+
+    ES = "es"
+    EN = "en"
+
+
+class EstadoCuenta(str, Enum):
+    """Lifecycle of an account.
+
+    ``pendiente_verificacion`` is where RF-001 leaves a self-registered account
+    until the address is confirmed; ``suspendida`` is what RF-035 writes when
+    the administrator deactivates an internal account, and the login answers
+    403 from then on (CA-01).
     """
 
     ACTIVA = "activa"
+    PENDIENTE_VERIFICACION = "pendiente_verificacion"
     SUSPENDIDA = "suspendida"
+
+
+#: Account states that may still obtain and use a token.
+#:
+#: The two non-active states are NOT interchangeable and this is the single
+#: place that says so. ``suspendida`` is a decision somebody took about the
+#: person (RF-035 CA-01 -> 403); ``pendiente_verificacion`` is an errand the
+#: person has not run yet, and RF-001 flow 5a explicitly creates the account
+#: even when the verification mail could not be delivered. Locking that account
+#: out would mean the one flow the requirement describes as recoverable is the
+#: one nobody can recover from, with no real SMTP server to fix it. RF-002 flow
+#: 2c is therefore served by OFFERING the resend (``Sesion.verificacion_pendiente``
+#: plus ``POST /auth/verificacion/reenviar``), not by refusing the login.
+ESTADOS_CUENTA_CON_ACCESO: frozenset[str] = frozenset(
+    {EstadoCuenta.ACTIVA.value, EstadoCuenta.PENDIENTE_VERIFICACION.value}
+)
 
 
 class EstadoBahia(str, Enum):

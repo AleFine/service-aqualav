@@ -1,5 +1,7 @@
 """Data access for ``usuario``, ``rol`` and ``permiso``."""
 
+from datetime import datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -29,6 +31,12 @@ def obtener_por_correo(db: Session, correo: str) -> Usuario | None:
 def existe_correo(db: Session, correo: str) -> bool:
     """Whether the e-mail is already taken (RF-001 CA-02)."""
     consulta = select(Usuario.id).where(Usuario.correo == correo.strip().lower())
+    return db.scalars(consulta).first() is not None
+
+
+def existe_documento(db: Session, numero_documento: str) -> bool:
+    """Whether the document number is already taken (RF-001 v1.0, step 4)."""
+    consulta = select(Usuario.id).where(Usuario.numero_documento == numero_documento.strip())
     return db.scalars(consulta).first() is not None
 
 
@@ -119,6 +127,9 @@ def crear(
     rol_id: int,
     estado_cuenta: str,
     bahia_habitual_id: int | None = None,
+    tipo_documento: str | None = None,
+    numero_documento: str | None = None,
+    consentimiento_privacidad_en: datetime | None = None,
 ) -> Usuario:
     """Insert a user. The password arrives already hashed."""
     usuario = Usuario(
@@ -126,10 +137,13 @@ def crear(
         apellidos=apellidos,
         correo=correo.strip().lower(),
         telefono=telefono,
+        tipo_documento=tipo_documento,
+        numero_documento=numero_documento,
         hash_password=hash_password,
         rol_id=rol_id,
         estado_cuenta=estado_cuenta,
         bahia_habitual_id=bahia_habitual_id,
+        consentimiento_privacidad_en=consentimiento_privacidad_en,
         intentos_fallidos=0,
     )
     db.add(usuario)

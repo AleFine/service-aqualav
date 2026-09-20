@@ -38,7 +38,26 @@ USUARIO_DESACTIVADO = "usuario.desactivado"
 USUARIO_ACTIVADO = "usuario.activado"
 USUARIO_PASSWORD_TEMPORAL_ENVIADA = "usuario.password_temporal_enviada"
 USUARIO_PASSWORD_TEMPORAL_NO_ENVIADA = "usuario.password_temporal_no_enviada"
+#: RF-001 step 5 and flow 5a: the verification mail left, or it did not and the
+#: account was created anyway so the customer can ask for another one.
+USUARIO_VERIFICACION_ENVIADA = "usuario.verificacion_enviada"
+USUARIO_VERIFICACION_NO_ENVIADA = "usuario.verificacion_no_enviada"
+USUARIO_CORREO_VERIFICADO = "usuario.correo_verificado"
+#: RF-006 flow 3a: the address was NOT changed yet, only asked to be.
+USUARIO_CORREO_CAMBIO_SOLICITADO = "usuario.correo_cambio_solicitado"
+USUARIO_CORREO_CAMBIADO = "usuario.correo_cambiado"
+#: RF-003. The token itself is never part of ``datos`` (RNF-014).
+USUARIO_RECUPERACION_SOLICITADA = "usuario.recuperacion_solicitada"
+USUARIO_PASSWORD_RESTABLECIDA = "usuario.password_restablecida"
+#: RF-005: one session closed by its owner, as opposed to a mass revocation.
+USUARIO_SESION_CERRADA = "usuario.sesion_cerrada"
+#: RF-006: the editable part of the profile.
+USUARIO_PERFIL_ACTUALIZADO = "usuario.perfil_actualizado"
 VEHICULO_REGISTRADO = "vehiculo.registrado"
+#: RF-008: edition, logical deletion, and the verification RN-01 asks for.
+VEHICULO_ACTUALIZADO = "vehiculo.actualizado"
+VEHICULO_DADO_DE_BAJA = "vehiculo.dado_de_baja"
+VEHICULO_VERIFICADO = "vehiculo.verificado"
 SERVICIO_CREADO = "servicio.creado"
 SERVICIO_ACTUALIZADO = "servicio.actualizado"
 SERVICIO_PRECIO_CAMBIADO = "servicio.precio_cambiado"

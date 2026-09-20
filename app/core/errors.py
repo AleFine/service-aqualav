@@ -121,6 +121,39 @@ class CuentaDesactivada(AppError):
     )
 
 
+class DocumentoYaRegistrado(AppError):
+    """RF-001 v1.0: the document number has a uniqueness of its own.
+
+    Separate from ``CORREO_YA_REGISTRADO`` because the corrective action is a
+    different one: the e-mail can be changed, the document cannot, so what the
+    person has to do is recover the account that already holds it.
+    """
+
+    codigo = "DOCUMENTO_YA_REGISTRADO"
+    http_status = 409
+    mensaje = (
+        "El número de documento ingresado ya tiene una cuenta. "
+        "Inicia sesión o recupera tu contraseña para entrar a ella."
+    )
+
+
+class TokenInvalido(AppError):
+    """RF-003 CA-02 / flow 3a: an expired, already spent or unknown token.
+
+    A 400 and not a 401, because the requirement says 400 literally and
+    because nothing about the CALLER is being rejected: the link is what is
+    no longer usable. The three causes share one message on purpose - telling
+    them apart would say whether an address has a reset in flight.
+    """
+
+    codigo = "TOKEN_INVALIDO"
+    http_status = 400
+    mensaje = (
+        "El enlace ya no es válido: caducó o ya fue utilizado. "
+        "Solicita uno nuevo para continuar."
+    )
+
+
 class CambioDeRolPropioDenegado(AppError):
     """RF-004 flow 3a: nobody may take their own administration away."""
 
@@ -147,6 +180,36 @@ class PlacaInvalida(AppError):
     codigo = "PLACA_INVALIDA"
     http_status = 422
     mensaje = "La placa no tiene un formato válido. Usa el formato ABC-123, A1B-123 o 1234-AB."
+
+
+class VehiculoConReservaVigente(AppError):
+    """RF-008 flow 3a: the deletion is refused and the booking is named.
+
+    ``detalles`` carries the code and the date of every live reservation, which
+    is the part the requirement insists on: "informa la reserva asociada".
+    """
+
+    codigo = "VEHICULO_CON_RESERVA_VIGENTE"
+    http_status = 409
+    mensaje = (
+        "El vehículo tiene una reserva vigente y no puede darse de baja. "
+        "Cancélala o espera a que se entregue el vehículo."
+    )
+
+
+class VehiculoNoVerificado(AppError):
+    """RN-01 v1.0: "registered AND VERIFIED" before booking.
+
+    Only raised when ``settings.exigir_vehiculo_verificado`` is on; see the
+    setting for why it ships off.
+    """
+
+    codigo = "VEHICULO_NO_VERIFICADO"
+    http_status = 422
+    mensaje = (
+        "El vehículo todavía no está verificado por el local. "
+        "Acércate a recepción para verificarlo antes de reservar."
+    )
 
 
 # --------------------------------------------------------------------------
@@ -359,11 +422,15 @@ ERRORES_POR_CODIGO: dict[str, type[AppError]] = {
         CredencialesInvalidas,
         CuentaBloqueada,
         CuentaDesactivada,
+        DocumentoYaRegistrado,
+        TokenInvalido,
         NoAutenticado,
         PermisoDenegado,
         CambioDeRolPropioDenegado,
         PlacaDuplicada,
         PlacaInvalida,
+        VehiculoConReservaVigente,
+        VehiculoNoVerificado,
         ReservaAnticipacionInsuficiente,
         ReservaFueraDeHorario,
         ReservaBloqueOcupado,

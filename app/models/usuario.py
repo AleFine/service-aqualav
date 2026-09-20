@@ -3,11 +3,11 @@
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
-from app.models.enums import EstadoCuenta
+from app.models.enums import EstadoCuenta, Idioma
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.models.bahia import Bahia
@@ -24,6 +24,13 @@ class Usuario(Base):
     apellidos: Mapped[str] = mapped_column(String(80), nullable=False)
     correo: Mapped[str] = mapped_column(String(160), unique=True, index=True, nullable=False)
     telefono: Mapped[str] = mapped_column(String(20), nullable=False)
+    #: RF-001 v1.0: the identity document, with a uniqueness of its own on the
+    #: number. Nullable because the accounts RF-035 creates for the staff are
+    #: not asked for one, and because every account that predates v1.0 has none.
+    tipo_documento: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    numero_documento: Mapped[str | None] = mapped_column(
+        String(20), unique=True, index=True, nullable=True
+    )
     hash_password: Mapped[str] = mapped_column(String(255), nullable=False)
     rol_id: Mapped[int] = mapped_column(Integer, ForeignKey("rol.id"), nullable=False)
     #: RF-035: the bay an operator usually works in. It only PRE-SELECTS the
@@ -31,7 +38,29 @@ class Usuario(Base):
     bahia_habitual_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("bahia.id"), nullable=True
     )
-    # EXTENSION POINT: v0.2 adds "pendiente_verificacion".
+    #: RF-006: the profile picture, as a key of the object storage. It is the
+    #: key and not the bytes: INC-6 brings ``ProveedorAlmacenamiento`` and the
+    #: endpoint that serves it, and the column already holds what it will read.
+    foto_perfil_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    #: RF-006 / RF-029: preferences. The language picks the notification
+    #: template; the two switches decide which channels INC-5 may use. A
+    #: customer who turns push off still gets the e-mail (RF-029).
+    idioma: Mapped[str] = mapped_column(
+        String(5), nullable=False, default=Idioma.ES.value, server_default=Idioma.ES.value
+    )
+    notificar_push: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    notificar_correo: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    #: RNF-018: when the person accepted the privacy policy. ``RegistroIn``
+    #: already refuses a registration without the tick; this is the receipt.
+    consentimiento_privacidad_en: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: When the account stopped being usable (RF-035, RF-008 for the person).
+    desactivado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     estado_cuenta: Mapped[str] = mapped_column(
         String(30),
         nullable=False,

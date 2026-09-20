@@ -21,6 +21,7 @@ from app.core.errors import (
     UsuarioConServiciosEnCurso,
     detalle,
 )
+from app.core.horario import ahora_utc
 from app.core.password import generar_password_temporal
 from app.core.security import hash_password
 from app.models import EstadoCuenta, Usuario
@@ -214,6 +215,9 @@ def actualizar(
             nuevo = EstadoCuenta.ACTIVA.value if datos.activa else EstadoCuenta.SUSPENDIDA.value
             cambios["estado_cuenta"] = {"anterior": usuario.estado_cuenta, "nuevo": nuevo}
             usuario.estado_cuenta = nuevo
+            # INC-3 added the column; this is what writes it. A reactivated
+            # account clears it, so "since when" is never a stale date.
+            usuario.desactivado_en = None if datos.activa else ahora_utc()
             eventos.registrar_evento(
                 db,
                 eventos.ENTIDAD_USUARIO,

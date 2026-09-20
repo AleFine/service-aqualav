@@ -31,9 +31,22 @@ class Vehiculo(Base):
     modelo: Mapped[str] = mapped_column(String(60), nullable=False)
     color: Mapped[str] = mapped_column(String(40), nullable=False)
     anio: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: RF-008: the deletion is LOGICAL. ``False`` takes the vehicle out of the
+    #: active list and out of any new booking, and leaves every reservation it
+    #: ever had readable (CA-02).
     activo: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
+    #: RN-01 v1.0 asks for a vehicle "registered AND VERIFIED". Verifying is
+    #: the counter confirming that the plate on the card is the plate on the
+    #: car; nothing else in the SRS describes how it is granted, which is why
+    #: ``settings.exigir_vehiculo_verificado`` decides whether booking demands
+    #: it (see ``app.services.reserva_service``).
+    verificado: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    verificado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    desactivado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

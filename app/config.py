@@ -23,6 +23,24 @@ class Settings(BaseSettings):
     # Every business rule (RN-02, RN-07) is evaluated in this timezone.
     zona_horaria: str = "America/Lima"
 
+    # RF-001: how long the e-mail verification link stays usable. It is not a
+    # credential, so a generous window costs nothing and saves a resend.
+    verificacion_correo_expira_horas: int = 24
+    # RF-003 CA-02: THIRTY MINUTES, and the requirement says so literally.
+    # It is a setting only so a demo can shorten it, never to relax it.
+    recuperacion_expira_minutos: int = 30
+    # Where the mobile app picks the link up. Only the simulated mail body
+    # uses it, so any value boots the API.
+    url_base_app: str = "https://aqualav.pe/app"
+
+    # RN-01 v1.0 reads "at least one vehicle registered AND VERIFIED". The rule
+    # is implemented (``vehiculo.verificado`` plus the counter's endpoint) and
+    # this switch decides whether booking DEMANDS it. It ships off because no
+    # requirement describes how a vehicle gets verified before its first visit:
+    # with it on, a brand new customer could not book the appointment that
+    # would let the counter verify their car (RN-01 vs RF-019 deadlock).
+    exigir_vehiculo_verificado: bool = False
+
     # --- Simulated external providers (plan section 4) -------------------
     # Every option here ships with a working default so the API boots with no
     # ``.env`` at all; only "simulado" exists today and it never uses the

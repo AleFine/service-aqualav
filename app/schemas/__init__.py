@@ -22,7 +22,18 @@ from app.schemas.asignacion import (
     ResultadoAsignacionOut,
     SugerenciaOut,
 )
-from app.schemas.auth import LoginIn, RefreshIn, RegistroIn, TokenOut
+from app.schemas.auth import (
+    LoginIn,
+    LogoutIn,
+    MensajeOut,
+    RecuperacionIn,
+    ReenvioVerificacionIn,
+    RefreshIn,
+    RegistroIn,
+    RestablecerPasswordIn,
+    TokenOut,
+    VerificacionIn,
+)
 from app.schemas.bahia import BahiaActualizar, BahiaCrear, BahiaOut, BahiaResumen
 from app.schemas.common import (
     TAMANIO_PAGINA_DEFECTO,
@@ -74,11 +85,18 @@ from app.schemas.tarifa import (
 )
 from app.schemas.usuario import (
     ClienteResumen,
+    PerfilActualizar,
+    PerfilOut,
     UsuarioInternoActualizar,
     UsuarioInternoCrear,
     UsuarioOut,
 )
-from app.schemas.vehiculo import VehiculoIn, VehiculoOut, VehiculoResumen
+from app.schemas.vehiculo import (
+    VehiculoActualizar,
+    VehiculoIn,
+    VehiculoOut,
+    VehiculoResumen,
+)
 
 __all__ = [
     "TAMANIO_PAGINA_DEFECTO",
@@ -128,6 +146,8 @@ __all__ = [
     "HorarioAtencionOut",
     "Lista",
     "LoginIn",
+    "LogoutIn",
+    "MensajeOut",
     "Pagina",
     "PagoCrear",
     "PagoOut",
@@ -136,15 +156,20 @@ __all__ = [
     "PaqueteLineaIn",
     "PaqueteLineaOut",
     "PaqueteOut",
+    "PerfilActualizar",
+    "PerfilOut",
     "PermisoOut",
     "PromocionActualizar",
     "PromocionIn",
     "PromocionOut",
     "PromocionResumen",
+    "RecuperacionIn",
+    "ReenvioVerificacionIn",
     "RefreshIn",
     "RegistroIn",
     "ReservaCrear",
     "ReservaOut",
+    "RestablecerPasswordIn",
     "ResultadoAsignacionOut",
     "RevisionIn",
     "RolOut",
@@ -158,9 +183,11 @@ __all__ = [
     "UsuarioInternoActualizar",
     "UsuarioInternoCrear",
     "UsuarioOut",
+    "VehiculoActualizar",
     "VehiculoIn",
     "VehiculoOut",
     "VehiculoResumen",
+    "VerificacionIn",
     "nombre_de_autor",
     "normalizar_telefono",
 ]
