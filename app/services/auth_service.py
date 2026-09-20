@@ -163,6 +163,32 @@ def autenticar(db: Session, correo: str, password: str) -> Sesion:
     return _emitir(usuario)
 
 
+def revocar_tokens_de_refresco(db: Session, usuario_id: int, motivo: str) -> None:
+    """Invalidate every refresh token of a user (RF-004 flow 4a).
+
+    HOOK, on purpose. The revocation list lives in ``token_refresco.jti``, and
+    that table arrives with RF-005 in INC-3: today a refresh token is a
+    self-contained JWT and there is nowhere to write the revocation, so all the
+    hook can do is leave the intent in the event log (P7), with the moment and
+    the reason, for the audit trail of RF-036.
+
+    TODO(INC-3, RF-005): replace the body with the real revocation - insert the
+    ``jti`` of every live refresh token of ``usuario_id`` in the revocation
+    list and make :func:`refrescar` reject the ones listed. The call sites
+    (:mod:`app.services.rol_service`) must not change.
+
+    The caller owns the transaction: nothing is committed here.
+    """
+    eventos.registrar_evento(
+        db,
+        eventos.ENTIDAD_USUARIO,
+        usuario_id,
+        eventos.USUARIO_TOKENS_REVOCADOS,
+        autor_id=None,
+        datos={"motivo": motivo, "ocurrido_en": ahora_utc().isoformat()},
+    )
+
+
 def refrescar(db: Session, refresh_token: str) -> Sesion:
     """Exchange a valid refresh token for a brand new pair (RF-002).
 

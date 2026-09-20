@@ -26,6 +26,7 @@ from app.schemas.reserva import (
     ReservaCrear,
     ReservaOut,
 )
+from app.schemas.rol import AsignacionRolIn, PermisoOut, RolOut
 from app.schemas.servicio import ServicioActualizar, ServicioCrear, ServicioOut, ServicioResumen
 from app.schemas.usuario import ClienteResumen, UsuarioOut
 from app.schemas.vehiculo import VehiculoIn, VehiculoOut, VehiculoResumen
@@ -33,6 +34,7 @@ from app.schemas.vehiculo import VehiculoIn, VehiculoOut, VehiculoResumen
 __all__ = [
     "TAMANIO_PAGINA_DEFECTO",
     "TAMANIO_PAGINA_MAXIMO",
+    "AsignacionRolIn",
     "BahiaResumen",
     "BloqueDisponible",
     "CambioEstadoIn",
@@ -53,10 +55,12 @@ __all__ = [
     "Pagina",
     "PagoCrear",
     "PagoOut",
+    "PermisoOut",
     "RefreshIn",
     "RegistroIn",
     "ReservaCrear",
     "ReservaOut",
+    "RolOut",
     "ServicioActualizar",
     "ServicioCrear",
     "ServicioOut",

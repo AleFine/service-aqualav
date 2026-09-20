@@ -27,8 +27,11 @@ class Settings(BaseSettings):
     seed_enabled: bool = True
     seed_admin_correo: str = "admin@aqualav.pe"
     seed_admin_password: str = "Admin1234"
-    seed_personal_correo: str = "personal@aqualav.pe"
-    seed_personal_password: str = "Personal1234"
+    # RF-004 v1.0: ``personal`` is split, so the demo staff is two accounts.
+    seed_recepcion_correo: str = "recepcion@aqualav.pe"
+    seed_recepcion_password: str = "Recepcion1234"
+    seed_operario_correo: str = "operario@aqualav.pe"
+    seed_operario_password: str = "Operario1234"
     seed_cliente_correo: str = "cliente@aqualav.pe"
     seed_cliente_password: str = "Cliente1234"
 

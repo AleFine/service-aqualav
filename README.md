@@ -145,7 +145,7 @@ importación es intencionada. Ver `[tool.ruff.lint.flake8-bugbear]` en
 `pyproject.toml`.
 
 Cada prueba levanta su propia base sembrada y un `TestClient` autenticado como
-cliente, personal o administrador. Las pruebas cubren, como mínimo, todos los
+cliente, recepcionista, operario o administrador. Las pruebas cubren, como mínimo, todos los
 criterios de aceptación (`CA-nn`) de los requisitos implementados:
 
 | Archivo | Cubre |
@@ -158,6 +158,7 @@ criterios de aceptación (`CA-nn`) de los requisitos implementados:
 | `test_operacion.py` | RF-019 CA-01/02/03 · RF-021 CA-01/02/03 · RF-022 CA-02 · RF-024 CA-01/02 |
 | `test_pagos.py` | RF-026 CA-01/02/03 |
 | `test_rbac.py` | RF-004 CA-01/02/**03** (inspección de código automatizada) |
+| `test_roles.py` | RF-004 v1.0: catálogo de roles y permisos, asignación de rol, flujos 3a y 4a, CA-02 (bitácora con el valor anterior) |
 
 `SELECT … FOR UPDATE` no hace nada en SQLite: por eso la prueba de
 concurrencia afirma el **resultado** (exactamente un `201` y un `409`) y nunca
@@ -172,13 +173,19 @@ Las crea el seed y se configuran en `.env`. **Son solo para desarrollo.**
 | Rol | Correo | Contraseña | Aterriza en |
 |---|---|---|---|
 | Administrador | `admin@aqualav.pe` | `Admin1234` | catálogo de servicios |
-| Personal | `personal@aqualav.pe` | `Personal1234` | pantalla de operación |
+| Recepcionista | `recepcion@aqualav.pe` | `Recepcion1234` | mostrador (recepción y entrega) |
+| Operario | `operario@aqualav.pe` | `Operario1234` | cola de la bahía |
 | Cliente | `cliente@aqualav.pe` | `Cliente1234` | inicio del cliente |
 
-El seed también carga los 13 permisos, los 3 roles, las 4 transiciones de
-estado, las 4 bahías, 5 servicios con su precio vigente y un vehículo de
-demostración (`ABC-123`) para el cliente. Es idempotente: se puede ejecutar
-tantas veces como haga falta.
+Todas tienen un valor por defecto en `app/config.py`, así que el sistema
+arranca sin tocar `.env`; las claves de configuración son
+`SEED_RECEPCION_CORREO`, `SEED_RECEPCION_PASSWORD`, `SEED_OPERARIO_CORREO` y
+`SEED_OPERARIO_PASSWORD`.
+
+El seed también carga los 20 permisos, los 4 roles, las 14 transiciones de
+estado del Anexo A v1.0, las 4 bahías, 5 servicios con su precio vigente y un
+vehículo de demostración (`ABC-123`) para el cliente. Es idempotente: se puede
+ejecutar tantas veces como haga falta.
 
 ---
 
@@ -199,6 +206,9 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 | `GET` | `/admin/servicios` | `servicio:administrar` | RF-010 | 200 · 403 |
 | `POST` | `/admin/servicios` | `servicio:administrar` | RF-010 | 201 · 403 · 422 |
 | `PATCH` | `/admin/servicios/{id}` | `servicio:administrar` | RF-010 | 200 · 403 · 404 · 422 |
+| `GET` | `/admin/roles` | `rol:administrar` | RF-004 | 200 · 401 · 403 |
+| `GET` | `/admin/permisos` | `rol:administrar` | RF-004 | 200 · 401 · 403 |
+| `PUT` | `/admin/usuarios/{id}/rol` | `rol:administrar` | RF-004 | 200 · 403 · 404 · **422** |
 | `GET` | `/estados` | autenticado | P3 | 200 |
 | `GET` | `/disponibilidad?fecha=&servicio_id=` | `disponibilidad:leer` | RF-013 | 200 · 404 |
 | `POST` | `/reservas` | `reserva:crear` | RF-014 | 201 · 404 · **409** · 422 |
@@ -213,16 +223,26 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 | `GET` | `/api/v1/health` | público | RNF-010 | 200 |
 
 **La autorización es siempre por permiso, nunca por nombre de rol** (principio
-`P5`, `RF-004 CA-03`). Añadir los roles `Recepcionista` y `Operario` en v0.4 es
-insertar filas en `rol` y `rol_permiso`: ningún endpoint cambia. Además existe
-autorización horizontal: quien tiene `reserva:leer_propias` pero no
-`reserva:leer_todas` solo ve sus propias reservas.
+`P5`, `RF-004 CA-03`). Los cuatro roles de la v1.0 (`cliente`, `recepcionista`,
+`operario`, `administrador`) salieron de dividir `personal` en filas de `rol` y
+`rol_permiso`: ningún endpoint cambió, y `PUT /admin/usuarios/{id}/rol` asigna
+el rol **por identificador**, para que tampoco el cliente móvil tenga que
+escribir un nombre de rol. Además existe autorización horizontal: quien tiene
+`reserva:leer_propias` pero no `reserva:leer_todas` solo ve sus propias
+reservas.
+
+El cambio de rol se aplica en la siguiente petición (los permisos se leen de la
+base, no del token), escribe un evento de dominio con el valor anterior y el
+nuevo, y llama al gancho que invalidará los tokens de refresco del afectado
+—la revocación real llega con `RF-005`—. Un administrador no puede quitarse a
+sí mismo `rol:administrar` (`422 CAMBIO_DE_ROL_PROPIO`).
 
 ### Reglas de negocio que verás en las respuestas
 
 - `RN-02` — una reserva necesita 60 minutos de anticipación.
 - `RN-03` — una bahía atiende un vehículo a la vez; el solapamiento se evalúa
-  contra las reservas en `confirmada` o `en_atencion`.
+  contra las reservas en cualquier estado **no terminal**, derivado de
+  `transicion_estado` y nunca listado en código.
 - `RN-07` — horario de atención: lunes a sábado 08:00–19:00, domingos
   09:00–14:00. El intervalo completo debe caber en la ventana del día.
 - `RN-09` — no se entrega un vehículo sin servicio finalizado y pago confirmado.
@@ -238,25 +258,47 @@ señaladas en el código con el comentario `EXTENSION POINT`.
 
 ### P3 — La máquina de estados vive en `transicion_estado`
 
-La tabla guarda las transiciones válidas con el permiso que cada una exige:
+La tabla guarda las transiciones válidas con el permiso que cada una exige y
+el endpoint que es dueño del movimiento. Estas son las catorce filas del Anexo
+A v1.0:
 
-| estado_origen | estado_destino | permiso_requerido |
-|---|---|---|
-| `confirmada` | `en_atencion` | `reserva:check_in` |
-| `confirmada` | `cancelada` | `reserva:cancelar` |
-| `en_atencion` | `finalizado` | `reserva:avanzar_estado` |
-| `finalizado` | `entregado` | `reserva:check_out` |
+| estado_origen | estado_destino | permiso_requerido | endpoint dueño |
+|---|---|---|---|
+| `pendiente_pago` | `confirmada` | `pago:registrar` | `pago` |
+| `pendiente_pago` | `cancelada` | `reserva:cancelar` | `cancelacion` |
+| `confirmada` | `en_recepcion` | `reserva:check_in` | `check_in` |
+| `confirmada` | `cancelada` | `reserva:cancelar` | `cancelacion` |
+| `en_recepcion` | `asignado` | `reserva:asignar` | `asignacion` |
+| `en_recepcion` | `cancelada` | `reserva:cancelar` | `cancelacion` |
+| `asignado` | `en_lavado` | `reserva:avanzar_estado` | — |
+| `en_lavado` | `secado` | `reserva:avanzar_estado` | — |
+| `secado` | `acabado` | `reserva:avanzar_estado` | — |
+| `acabado` | `finalizado` | `reserva:avanzar_estado` | — (marca fin de servicio) |
+| `finalizado` | `entregado` | `reserva:check_out` | `check_out` |
+| `finalizado` | `en_revision` | `reserva:revisar` | `revision` |
+| `en_revision` | `acabado` | `reserva:avanzar_estado` | — |
+| `en_revision` | `entregado` | `reserva:check_out` | `check_out` |
+
+Las otras cuatro transiciones del Anexo A no son filas: dos son la **creación**
+de la reserva (no hay estado de origen) y dos son los **sumideros terminales**,
+que se deducen de la ausencia de filas salientes.
 
 `operacion_service.cambiar_estado` **lee esta tabla en cada intento**; ninguna
-línea de código enumera los estados permitidos. La respuesta de una reserva
+línea de código enumera los estados permitidos, y desde INC-1A tampoco el
+destino: el check-in, el check-out y la cancelación preguntan a la tabla a
+dónde llevan (`destino_declarado`). La prueba
+`test_ningun_modulo_compara_el_nombre_de_un_estado` recorre el paquete `app`
+con el módulo `ast` y falla si algún módulo compara con un estado concreto. La respuesta de una reserva
 incluye `transiciones_permitidas`, ya filtrado por los permisos de quien
 pregunta, y la app móvil dibuja sus botones a partir de ese arreglo.
 
-*Cómo crece a v1.0*: los once estados de la versión completa y sus nuevas
-transiciones (`pendiente_pago`, `en_secado`, `en_control_calidad`, …) se
-insertan como filas. Basta reiniciar la API; no hay despliegue de código. La
-prueba `test_una_transicion_nueva_en_la_tabla_funciona_sin_tocar_codigo` lo
-demuestra insertando una transición inédita y usándola en el mismo test.
+*Cómo creció a v1.0*: los once estados de la versión completa entraron como
+filas en la migración `0003_estados_roles_v1`, que además convirtió los datos
+existentes (`en_atencion` → `en_lavado`). Ni un `elif` nuevo. La prueba
+`test_una_transicion_nueva_en_la_tabla_funciona_sin_tocar_codigo` lo sigue
+demostrando insertando una transición inédita y usándola en el mismo test, y
+`test_el_checkin_aterriza_donde_diga_la_tabla` hace lo propio con un estado
+destino que no existe en ningún enum.
 
 ### P7 — Toda mutación deja rastro: `reserva_estado_historial` y `evento_dominio`
 
@@ -308,11 +350,12 @@ app/
   models/                  una tabla por módulo
   schemas/                 contratos Pydantic v2
   repositories/            acceso a datos por agregado
-  services/                auth · vehiculo · servicio · disponibilidad · reserva
-                           operacion · pago · eventos · notificador
+  services/                auth · rol · vehiculo · servicio · disponibilidad
+                           reserva · operacion · pago · eventos · notificador
                            politica_cancelacion · ensamblador
   api/v1/                  auth · vehiculos · servicios · admin_servicios
-                           disponibilidad · reservas · operacion · pagos · health
+                           admin_roles · disponibilidad · reservas · operacion
+                           pagos · estados · health
   seed.py                  carga inicial idempotente
 migrations/                Alembic
 tests/                     pytest sobre SQLite en memoria

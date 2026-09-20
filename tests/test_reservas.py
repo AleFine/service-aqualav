@@ -11,6 +11,7 @@ from tests.conftest import (
     crear_vehiculo,
     dejar_una_sola_bahia,
     instante,
+    llevar_hasta_finalizado,
     proximo_lunes,
 )
 
@@ -216,14 +217,16 @@ def test_un_cliente_no_ve_las_reservas_de_otro(
 
 
 def test_el_personal_si_ve_las_reservas_de_todos(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, api_operario, servicio_medio, vehiculo_id
 ):
-    """``reserva:leer_todas`` levanta el filtro horizontal."""
+    """``reserva:leer_todas`` levanta el filtro horizontal.
+
+    Los dos roles en que v1.0 parte ``personal`` lo conservan: el mostrador y
+    la bahía trabajan sobre reservas ajenas, no propias (RF-004)."""
     crear_reserva(api_cliente, servicio_medio.id, vehiculo_id, instante(proximo_lunes(), 10, 0))
 
-    listado = api_personal.get(f"{RUTA}/reservas").json()
-
-    assert listado["total"] == 1
+    assert api_recepcion.get(f"{RUTA}/reservas").json()["total"] == 1
+    assert api_operario.get(f"{RUTA}/reservas").json()["total"] == 1
 
 
 def test_cancelar_registra_motivo_autor_y_fecha(api_cliente, servicio_medio, vehiculo_id):
@@ -270,18 +273,45 @@ def test_el_bloque_cancelado_vuelve_a_ofrecerse(api_cliente, db, servicio_corto,
     assert "10:00" in bloques()
 
 
-def test_cancelar_una_reserva_en_atencion_responde_422(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+def test_el_recepcionista_cancela_una_reserva_ya_recibida(
+    api_cliente, api_recepcion, servicio_medio, vehiculo_id
 ):
-    """RF-016 CA-02: la transición no existe en ``transicion_estado``."""
+    """Anexo A v1.0, transición 8: ``en_recepcion -> cancelada``.
+
+    El MVP no permitía cancelar después del check-in; v1.0 sí, y solo desde el
+    mostrador (``reserva:cancelar``). Fue una fila nueva, no una rama nueva."""
     reserva = crear_reserva(
         api_cliente, servicio_medio.id, vehiculo_id, instante(proximo_lunes(), 10, 0)
     ).json()
-    api_personal.post(
+    api_recepcion.post(
         f"{RUTA}/reservas/{reserva['id']}/check-in", json={"confirmar_retraso": False}
     )
 
-    respuesta = api_cliente.post(
+    respuesta = api_recepcion.post(
+        f"{RUTA}/reservas/{reserva['id']}/cancelacion", json={"motivo": "El cliente se arrepintió"}
+    )
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["estado"] == "cancelada"
+    assert respuesta.json()["cancelacion"]["motivo"] == "El cliente se arrepintió"
+
+
+def test_cancelar_una_reserva_en_lavado_responde_422(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+):
+    """RF-016 CA-02: una vez en la bahía la transición ya no está declarada."""
+    from tests.conftest import avanzar_estado, forzar_estado
+
+    reserva = crear_reserva(
+        api_cliente, servicio_medio.id, vehiculo_id, instante(proximo_lunes(), 10, 0)
+    ).json()
+    api_recepcion.post(
+        f"{RUTA}/reservas/{reserva['id']}/check-in", json={"confirmar_retraso": False}
+    )
+    forzar_estado(db, reserva["id"], "asignado")
+    assert avanzar_estado(api_operario, reserva["id"], "en_lavado").status_code == 200
+
+    respuesta = api_recepcion.post(
         f"{RUTA}/reservas/{reserva['id']}/cancelacion", json={"motivo": "Ya no"}
     )
 
@@ -293,7 +323,7 @@ def test_cancelar_una_reserva_en_atencion_responde_422(
 # C3 - the bay is held until the delivery, not until the service ends
 # --------------------------------------------------------------------------
 def test_reserva_finalizada_retiene_su_bahia_hasta_la_entrega(
-    api_cliente, api_personal, db, servicio_corto, vehiculo_id
+    api_cliente, api_recepcion, api_operario, db, servicio_corto, vehiculo_id
 ):
     """RF-024 CA-02: la bahía se libera *dada una entrega registrada*.
 
@@ -305,15 +335,7 @@ def test_reserva_finalizada_retiene_su_bahia_hasta_la_entrega(
     inicio = instante(fecha, 10, 0)
 
     reserva = crear_reserva(api_cliente, servicio_corto.id, vehiculo_id, inicio).json()
-    api_personal.post(
-        f"{RUTA}/reservas/{reserva['id']}/check-in", json={"confirmar_retraso": False}
-    )
-    assert (
-        api_personal.post(
-            f"{RUTA}/reservas/{reserva['id']}/estado", json={"estado": "finalizado"}
-        ).status_code
-        == 200
-    )
+    llevar_hasta_finalizado(api_recepcion, api_operario, db, reserva["id"])
 
     otro = crear_vehiculo(api_cliente, "PQR-321")
     choque = crear_reserva(api_cliente, servicio_corto.id, otro, inicio)
@@ -324,13 +346,13 @@ def test_reserva_finalizada_retiene_su_bahia_hasta_la_entrega(
     assert codigo_error(choque) == "RESERVA_BLOQUE_OCUPADO"
 
     # Tras el cobro y la entrega, el bloque vuelve a ofrecerse.
-    api_personal.post(
+    api_recepcion.post(
         f"{RUTA}/reservas/{reserva['id']}/pagos",
         json={"medio": "efectivo", "monto_centimos": 1500},
         headers={"Idempotency-Key": "entrega-libera"},
     )
     assert (
-        api_personal.post(
+        api_recepcion.post(
             f"{RUTA}/reservas/{reserva['id']}/check-out", json={"conformidad_cliente": True}
         ).status_code
         == 200

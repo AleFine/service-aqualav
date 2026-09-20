@@ -11,11 +11,27 @@ from enum import Enum
 
 
 class EstadoReserva(str, Enum):
-    """Annex A state machine. Allowed moves live in ``transicion_estado``."""
+    """Annex A v1.0 state machine. Allowed moves live in ``transicion_estado``.
 
+    This is VOCABULARY, not the machine: it spells the strings the database
+    stores so the seed and the migrations do not repeat literals. Nothing in
+    the service layer may branch on a member of this enum (principle P3); which
+    move is possible, who owns it and where each operation leads are all read
+    from ``transicion_estado``.
+
+    ``en_atencion`` of the MVP is GONE: v1.0 splits it into ``en_lavado``,
+    ``secado`` and ``acabado`` (migration ``0003`` converts the stored data).
+    """
+
+    PENDIENTE_PAGO = "pendiente_pago"
     CONFIRMADA = "confirmada"
-    EN_ATENCION = "en_atencion"
+    EN_RECEPCION = "en_recepcion"
+    ASIGNADO = "asignado"
+    EN_LAVADO = "en_lavado"
+    SECADO = "secado"
+    ACABADO = "acabado"
     FINALIZADO = "finalizado"
+    EN_REVISION = "en_revision"
     ENTREGADO = "entregado"
     CANCELADA = "cancelada"
 

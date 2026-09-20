@@ -1,15 +1,33 @@
-"""Counter operation: search, check-in, state machine and check-out.
+"""Counter and bay operation: search, check-in, state machine and check-out.
 
-RF-019, RF-021, RF-022 and RF-024.
+RF-019, RF-021, RF-022 and RF-024, on the eleven states of Annex A v1.0.
+
+The chain a service walks is now ``confirmada -> en_recepcion -> asignado ->
+en_lavado -> secado -> acabado -> finalizado -> entregado``, and it is split
+between two roles: the receptionist owns the doors of the shop (check-in,
+assignment, charge, delivery) and the operator owns the bay (RF-021).
 """
 
+import ast
+import pathlib
 from datetime import timedelta
 
 from sqlalchemy import func, select
 
 from app.core.horario import a_utc, ahora
-from app.models import Pago, Reserva, TransicionEstado
-from tests.conftest import RUTA, codigo_error, crear_reserva, instante, proximo_lunes
+from app.models import EstadoReserva, Pago, Reserva, TransicionEstado
+from tests.conftest import (
+    RUTA,
+    avanzar_estado,
+    codigo_error,
+    crear_reserva,
+    forzar_estado,
+    instante,
+    llevar_hasta_finalizado,
+    proximo_lunes,
+)
+
+RAIZ_APP = pathlib.Path(__file__).resolve().parent.parent / "app"
 
 
 def _reserva_confirmada(api_cliente, servicio, vehiculo_id, hora: int = 10) -> dict:
@@ -20,19 +38,15 @@ def _reserva_confirmada(api_cliente, servicio, vehiculo_id, hora: int = 10) -> d
     return respuesta.json()
 
 
-def _check_in(api_personal, reserva_id: int):
-    return api_personal.post(
+def _check_in(api_recepcion, reserva_id: int):
+    return api_recepcion.post(
         f"{RUTA}/reservas/{reserva_id}/check-in",
         json={"observaciones": "Rayón leve en la puerta", "confirmar_retraso": False},
     )
 
 
-def _finalizar(api_personal, reserva_id: int):
-    return api_personal.post(f"{RUTA}/reservas/{reserva_id}/estado", json={"estado": "finalizado"})
-
-
-def _pagar(api_personal, reserva_id: int, monto: int, clave: str = "clave-1"):
-    return api_personal.post(
+def _pagar(api_recepcion, reserva_id: int, monto: int, clave: str = "clave-1"):
+    return api_recepcion.post(
         f"{RUTA}/reservas/{reserva_id}/pagos",
         json={"medio": "efectivo", "monto_centimos": monto},
         headers={"Idempotency-Key": clave},
@@ -43,12 +57,12 @@ def _pagar(api_personal, reserva_id: int, monto: int, clave: str = "clave-1"):
 # RF-019 - check-in
 # --------------------------------------------------------------------------
 def test_buscar_por_codigo_encuentra_la_reserva(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, servicio_medio, vehiculo_id
 ):
     """RF-019 paso 1."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
 
-    respuesta = api_personal.get(f"{RUTA}/reservas/buscar", params={"codigo": reserva["codigo"]})
+    respuesta = api_recepcion.get(f"{RUTA}/reservas/buscar", params={"codigo": reserva["codigo"]})
 
     assert respuesta.status_code == 200, respuesta.text
     items = respuesta.json()["items"]
@@ -60,53 +74,57 @@ def test_buscar_por_codigo_encuentra_la_reserva(
 
 
 def test_buscar_por_placa_encuentra_la_reserva(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, servicio_medio, vehiculo_id
 ):
     _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
 
-    respuesta = api_personal.get(f"{RUTA}/reservas/buscar", params={"placa": "abc-123"})
+    respuesta = api_recepcion.get(f"{RUTA}/reservas/buscar", params={"placa": "abc-123"})
 
     assert respuesta.status_code == 200, respuesta.text
     assert len(respuesta.json()["items"]) == 1
 
 
-def test_buscar_sin_coincidencias_responde_404(api_personal):
-    respuesta = api_personal.get(f"{RUTA}/reservas/buscar", params={"codigo": "AQL-ZZZZZZ"})
+def test_buscar_sin_coincidencias_responde_404(api_recepcion):
+    respuesta = api_recepcion.get(f"{RUTA}/reservas/buscar", params={"codigo": "AQL-ZZZZZZ"})
 
     assert respuesta.status_code == 404
 
 
-def test_el_check_in_pasa_a_en_atencion_y_registra_la_hora(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+def test_el_check_in_pasa_a_en_recepcion_y_registra_la_hora(
+    api_cliente, api_recepcion, servicio_medio, vehiculo_id
 ):
-    """RF-019 CA-01 y CA-03 (la bahía queda ocupada)."""
+    """RF-019 CA-01 en su redacción v1.0: el destino es «En recepción».
+
+    El MVP aterrizaba en ``en_atencion``, que el Anexo A v1.0 elimina. Ninguna
+    línea de ``operacion_service`` cambió: el destino lo declara la fila.
+    """
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
 
-    respuesta = _check_in(api_personal, reserva["id"])
+    respuesta = _check_in(api_recepcion, reserva["id"])
 
     assert respuesta.status_code == 200, respuesta.text
     cuerpo = respuesta.json()
-    assert cuerpo["estado"] == "en_atencion"
+    assert cuerpo["estado"] == "en_recepcion"
     assert cuerpo["hora_ingreso"] is not None
     assert cuerpo["bahia"]["id"] == reserva["bahia"]["id"]
-    assert [fila["estado"] for fila in cuerpo["historial"]] == ["confirmada", "en_atencion"]
+    assert [fila["estado"] for fila in cuerpo["historial"]] == ["confirmada", "en_recepcion"]
 
 
 def test_el_check_in_de_una_reserva_ya_atendida_responde_422(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, servicio_medio, vehiculo_id
 ):
     """RF-019 CA-02."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    assert _check_in(api_personal, reserva["id"]).status_code == 200
+    assert _check_in(api_recepcion, reserva["id"]).status_code == 200
 
-    respuesta = _check_in(api_personal, reserva["id"])
+    respuesta = _check_in(api_recepcion, reserva["id"])
 
     assert respuesta.status_code == 422
     assert codigo_error(respuesta) == "TRANSICION_INVALIDA"
 
 
 def test_un_retraso_mayor_a_veinte_minutos_pide_confirmacion(
-    api_personal, db, usuario_cliente, servicio_medio, vehiculo_id
+    api_recepcion, db, usuario_cliente, servicio_medio, vehiculo_id
 ):
     """RF-019 flujo 3a.
 
@@ -130,32 +148,32 @@ def test_un_retraso_mayor_a_veinte_minutos_pide_confirmacion(
     db.add(reserva)
     db.commit()
 
-    sin_confirmar = api_personal.post(
+    sin_confirmar = api_recepcion.post(
         f"{RUTA}/reservas/{reserva.id}/check-in", json={"confirmar_retraso": False}
     )
     assert sin_confirmar.status_code == 409
     assert codigo_error(sin_confirmar) == "RETRASO_REQUIERE_CONFIRMACION"
 
-    confirmado = api_personal.post(
+    confirmado = api_recepcion.post(
         f"{RUTA}/reservas/{reserva.id}/check-in", json={"confirmar_retraso": True}
     )
     assert confirmado.status_code == 200, confirmado.text
-    assert confirmado.json()["estado"] == "en_atencion"
+    assert confirmado.json()["estado"] == "en_recepcion"
 
 
 # --------------------------------------------------------------------------
-# RF-021 - state machine
+# RF-021 - state machine (Anexo A v1.0)
 # --------------------------------------------------------------------------
-def test_volver_de_en_atencion_a_confirmada_responde_422(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+def test_volver_de_en_lavado_a_en_recepcion_responde_422(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
 ):
-    """RF-021 CA-01: esa transición no está declarada."""
+    """RF-021 CA-01 en su redacción v1.0: «En lavado» no vuelve a «En recepción»."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    _check_in(api_personal, reserva["id"])
+    _check_in(api_recepcion, reserva["id"])
+    forzar_estado(db, reserva["id"], "asignado")
+    assert avanzar_estado(api_operario, reserva["id"], "en_lavado").status_code == 200
 
-    respuesta = api_personal.post(
-        f"{RUTA}/reservas/{reserva['id']}/estado", json={"estado": "confirmada"}
-    )
+    respuesta = avanzar_estado(api_operario, reserva["id"], "en_recepcion")
 
     assert respuesta.status_code == 422
     assert codigo_error(respuesta) == "TRANSICION_INVALIDA"
@@ -163,20 +181,57 @@ def test_volver_de_en_atencion_a_confirmada_responde_422(
     assert respuesta.json()["error"]["detalles"]
 
 
+def test_la_cadena_de_bahia_la_recorre_el_operario(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+):
+    """Anexo A v1.0: ``asignado -> en_lavado -> secado -> acabado -> finalizado``."""
+    reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
+    _check_in(api_recepcion, reserva["id"])
+    forzar_estado(db, reserva["id"], "asignado")
+
+    recorrido = []
+    for estado in ("en_lavado", "secado", "acabado", "finalizado"):
+        respuesta = avanzar_estado(api_operario, reserva["id"], estado)
+        assert respuesta.status_code == 200, respuesta.text
+        recorrido.append(respuesta.json()["estado"])
+
+    assert recorrido == ["en_lavado", "secado", "acabado", "finalizado"]
+    # RF-022 CA-02: ``acabado -> finalizado`` es la fila que marca el fin.
+    assert respuesta.json()["hora_fin_real"] is not None
+
+
+def test_el_recepcionista_no_avanza_el_estado_del_servicio(
+    api_cliente, api_recepcion, db, servicio_medio, vehiculo_id
+):
+    """RF-004 v1.0: el mostrador y la bahía son dos roles distintos."""
+    reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
+    _check_in(api_recepcion, reserva["id"])
+    forzar_estado(db, reserva["id"], "asignado")
+
+    respuesta = avanzar_estado(api_recepcion, reserva["id"], "en_lavado")
+
+    assert respuesta.status_code == 403
+    assert codigo_error(respuesta) == "PERMISO_DENEGADO"
+
+
 def test_cada_transicion_escribe_una_fila_de_historial(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, api_operario, db, usuario_operario, servicio_medio, vehiculo_id
 ):
     """RF-021 CA-02 / EXTENSION POINT P7."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    _check_in(api_personal, reserva["id"])
 
-    respuesta = _finalizar(api_personal, reserva["id"])
+    llevar_hasta_finalizado(
+        api_recepcion, api_operario, db, reserva["id"], autor_id=usuario_operario.id
+    )
 
-    assert respuesta.status_code == 200, respuesta.text
-    cuerpo = respuesta.json()
+    cuerpo = api_operario.get(f"{RUTA}/reservas/{reserva['id']}").json()
     assert [fila["estado"] for fila in cuerpo["historial"]] == [
         "confirmada",
-        "en_atencion",
+        "en_recepcion",
+        "asignado",
+        "en_lavado",
+        "secado",
+        "acabado",
         "finalizado",
     ]
     for fila in cuerpo["historial"]:
@@ -187,7 +242,7 @@ def test_cada_transicion_escribe_una_fila_de_historial(
 
 
 def test_una_transicion_nueva_en_la_tabla_funciona_sin_tocar_codigo(
-    api_cliente, api_personal, db, servicio_medio, vehiculo_id
+    api_cliente, api_operario, db, servicio_medio, vehiculo_id
 ):
     """RF-021 CA-03 / EXTENSION POINT P3.
 
@@ -196,7 +251,7 @@ def test_una_transicion_nueva_en_la_tabla_funciona_sin_tocar_codigo(
     """
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
 
-    antes = _finalizar(api_personal, reserva["id"])
+    antes = avanzar_estado(api_operario, reserva["id"], "finalizado")
     assert antes.status_code == 422
 
     db.add(
@@ -208,35 +263,39 @@ def test_una_transicion_nueva_en_la_tabla_funciona_sin_tocar_codigo(
     )
     db.commit()
 
-    despues = _finalizar(api_personal, reserva["id"])
+    despues = avanzar_estado(api_operario, reserva["id"], "finalizado")
 
     assert despues.status_code == 200, despues.text
     assert despues.json()["estado"] == "finalizado"
 
 
 def test_las_transiciones_permitidas_dependen_de_los_permisos(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, api_operario, servicio_medio, vehiculo_id
 ):
     """La app dibuja sus botones con esta lista, nunca con condicionales locales."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
 
     del_cliente = api_cliente.get(f"{RUTA}/reservas/{reserva['id']}").json()
-    del_personal = api_personal.get(f"{RUTA}/reservas/{reserva['id']}").json()
+    del_recepcion = api_recepcion.get(f"{RUTA}/reservas/{reserva['id']}").json()
+    del_operario = api_operario.get(f"{RUTA}/reservas/{reserva['id']}").json()
 
     assert del_cliente["transiciones_permitidas"] == ["cancelada"]
-    assert set(del_personal["transiciones_permitidas"]) == {"en_atencion", "cancelada"}
+    assert set(del_recepcion["transiciones_permitidas"]) == {"en_recepcion", "cancelada"}
+    # El operario todavía no tiene nada que hacer con una reserva confirmada.
+    assert del_operario["transiciones_permitidas"] == []
 
 
 # --------------------------------------------------------------------------
 # RF-024 - check-out
 # --------------------------------------------------------------------------
-def test_no_se_entrega_sin_pago_confirmado(api_cliente, api_personal, servicio_medio, vehiculo_id):
+def test_no_se_entrega_sin_pago_confirmado(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
+):
     """RF-024 CA-01 / RN-09."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    _check_in(api_personal, reserva["id"])
-    _finalizar(api_personal, reserva["id"])
+    llevar_hasta_finalizado(api_recepcion, api_operario, db, reserva["id"])
 
-    respuesta = api_personal.post(
+    respuesta = api_recepcion.post(
         f"{RUTA}/reservas/{reserva['id']}/check-out", json={"conformidad_cliente": True}
     )
 
@@ -245,12 +304,12 @@ def test_no_se_entrega_sin_pago_confirmado(api_cliente, api_personal, servicio_m
 
 
 def test_no_se_entrega_un_servicio_que_no_esta_finalizado(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, servicio_medio, vehiculo_id
 ):
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    _check_in(api_personal, reserva["id"])
+    _check_in(api_recepcion, reserva["id"])
 
-    respuesta = api_personal.post(
+    respuesta = api_recepcion.post(
         f"{RUTA}/reservas/{reserva['id']}/check-out", json={"conformidad_cliente": True}
     )
 
@@ -259,7 +318,7 @@ def test_no_se_entrega_un_servicio_que_no_esta_finalizado(
 
 
 def test_con_el_pago_confirmado_la_entrega_libera_la_bahia(
-    api_cliente, api_personal, db, servicio_corto, vehiculo_id
+    api_cliente, api_recepcion, api_operario, db, servicio_corto, vehiculo_id
 ):
     """RF-024 CA-02: tras entregar, el bloque vuelve a ofrecerse."""
     from tests.conftest import dejar_una_sola_bahia
@@ -270,11 +329,10 @@ def test_con_el_pago_confirmado_la_entrega_libera_la_bahia(
         api_cliente, servicio_corto.id, vehiculo_id, instante(fecha, 10, 0)
     ).json()
 
-    _check_in(api_personal, reserva["id"])
-    _finalizar(api_personal, reserva["id"])
-    assert _pagar(api_personal, reserva["id"], 1500).status_code == 201
+    llevar_hasta_finalizado(api_recepcion, api_operario, db, reserva["id"])
+    assert _pagar(api_recepcion, reserva["id"], 1500).status_code == 201
 
-    respuesta = api_personal.post(
+    respuesta = api_recepcion.post(
         f"{RUTA}/reservas/{reserva['id']}/check-out", json={"conformidad_cliente": True}
     )
 
@@ -302,20 +360,19 @@ def test_con_el_pago_confirmado_la_entrega_libera_la_bahia(
 # every owned move: reaching ``entregado`` through it used to hand the vehicle
 # back with no payment at all (RN-09, RF-024 CA-01), and reaching ``cancelada``
 # left the reason, the author and the date empty (RF-016 CA-03).
+#
+# El administrador es quien ejerce estas pruebas: tiene TODOS los permisos, así
+# que si la puerta se cierra no es por falta de permiso sino por el dueño de la
+# transición, que es justo lo que se quiere verificar.
 # --------------------------------------------------------------------------
-def _estado_generico(api_personal, reserva_id: int, estado: str):
-    return api_personal.post(f"{RUTA}/reservas/{reserva_id}/estado", json={"estado": estado})
-
-
 def test_estado_generico_no_entrega_saltandose_checkout(
-    api_cliente, api_personal, db, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, api_operario, api_admin, db, servicio_medio, vehiculo_id
 ):
     """RN-09 / RF-024 CA-01: sin pago no se entrega, por ninguna puerta."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    _check_in(api_personal, reserva["id"])
-    _finalizar(api_personal, reserva["id"])
+    llevar_hasta_finalizado(api_recepcion, api_operario, db, reserva["id"])
 
-    respuesta = _estado_generico(api_personal, reserva["id"], "entregado")
+    respuesta = avanzar_estado(api_admin, reserva["id"], "entregado")
 
     assert respuesta.status_code == 422
     assert codigo_error(respuesta) == "TRANSICION_INVALIDA"
@@ -329,12 +386,12 @@ def test_estado_generico_no_entrega_saltandose_checkout(
 
 
 def test_estado_generico_no_cancela_saltandose_cancelacion(
-    api_cliente, api_personal, db, servicio_medio, vehiculo_id
+    api_cliente, api_admin, db, servicio_medio, vehiculo_id
 ):
     """RF-016 CA-03: cancelar exige motivo, autor y fecha."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
 
-    respuesta = _estado_generico(api_personal, reserva["id"], "cancelada")
+    respuesta = avanzar_estado(api_admin, reserva["id"], "cancelada")
 
     assert respuesta.status_code == 422
     assert codigo_error(respuesta) == "TRANSICION_INVALIDA"
@@ -355,16 +412,34 @@ def test_estado_generico_no_cancela_saltandose_cancelacion(
     assert legitima.json()["cancelacion"]["autor"]
 
 
+def test_estado_generico_no_asigna_saltandose_la_asignacion(
+    api_cliente, api_recepcion, api_admin, servicio_medio, vehiculo_id
+):
+    """RF-020: ``en_recepcion -> asignado`` tiene su propia operación.
+
+    INC-1B la implementa (``POST /reservas/{id}/asignacion``). La fila ya
+    existe, así que el endpoint genérico la rechaza desde hoy y nadie puede
+    marcar un servicio como asignado sin ocupar la bahía ni encolar al operario.
+    """
+    reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
+    _check_in(api_recepcion, reserva["id"])
+
+    respuesta = avanzar_estado(api_admin, reserva["id"], "asignado")
+
+    assert respuesta.status_code == 422
+    assert codigo_error(respuesta) == "TRANSICION_INVALIDA"
+    assert "asignacion" in str(respuesta.json()["error"]["detalles"])
+
+
 def test_checkout_sigue_funcionando_con_pago_confirmado(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
 ):
     """C1 cierra las rutas alternas sin tocar el camino feliz (RF-024 CA-02)."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    _check_in(api_personal, reserva["id"])
-    _finalizar(api_personal, reserva["id"])
-    assert _pagar(api_personal, reserva["id"], 2500).status_code == 201
+    llevar_hasta_finalizado(api_recepcion, api_operario, db, reserva["id"])
+    assert _pagar(api_recepcion, reserva["id"], 2500).status_code == 201
 
-    respuesta = api_personal.post(
+    respuesta = api_recepcion.post(
         f"{RUTA}/reservas/{reserva['id']}/check-out", json={"conformidad_cliente": True}
     )
 
@@ -376,36 +451,38 @@ def test_checkout_sigue_funcionando_con_pago_confirmado(
 
 
 def test_transicion_sin_endpoint_sigue_disponible_en_estado(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
 ):
     """Una transición sin dueño declarado la sigue haciendo ``POST /estado``."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    _check_in(api_personal, reserva["id"])
+    _check_in(api_recepcion, reserva["id"])
+    forzar_estado(db, reserva["id"], "asignado")
 
-    respuesta = _estado_generico(api_personal, reserva["id"], "finalizado")
+    respuesta = avanzar_estado(api_operario, reserva["id"], "en_lavado")
 
     assert respuesta.status_code == 200, respuesta.text
-    assert respuesta.json()["estado"] == "finalizado"
+    assert respuesta.json()["estado"] == "en_lavado"
 
 
-def test_el_checkin_de_un_estado_nuevo_solo_lo_declara_la_tabla(
-    api_cliente, api_personal, db, servicio_medio, vehiculo_id
+def test_el_checkin_aterriza_donde_diga_la_tabla(
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
 ):
-    """C1 quitó el literal ``confirmada`` del check-in: el origen es dato.
+    """P3 completo: el check-in no fija ni el origen NI el destino.
 
-    Se declara ``finalizado -> en_atencion`` con dueño ``check_in`` y el
-    check-in de una reserva finalizada pasa a ser válido, sin tocar código.
+    Se declara ``finalizado -> recepcion_express``, un estado que no existe en
+    ningún enum ni en ninguna línea de código, con dueño ``check_in``. El
+    check-in de una reserva finalizada pasa a ser válido y aterriza ahí, sin
+    desplegar nada. Antes de INC-1A el destino era el literal ``en_atencion``.
     """
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    _check_in(api_personal, reserva["id"])
-    _finalizar(api_personal, reserva["id"])
+    llevar_hasta_finalizado(api_recepcion, api_operario, db, reserva["id"])
 
-    assert _check_in(api_personal, reserva["id"]).status_code == 422
+    assert _check_in(api_recepcion, reserva["id"]).status_code == 422
 
     db.add(
         TransicionEstado(
             estado_origen="finalizado",
-            estado_destino="en_atencion",
+            estado_destino="recepcion_express",
             permiso_requerido="reserva:check_in",
             endpoint="check_in",
             marca_fin_servicio=False,
@@ -413,21 +490,21 @@ def test_el_checkin_de_un_estado_nuevo_solo_lo_declara_la_tabla(
     )
     db.commit()
 
-    despues = _check_in(api_personal, reserva["id"])
+    despues = _check_in(api_recepcion, reserva["id"])
 
     assert despues.status_code == 200, despues.text
-    assert despues.json()["estado"] == "en_atencion"
+    assert despues.json()["estado"] == "recepcion_express"
 
 
 # --------------------------------------------------------------------------
 # C3 - a state added as data is a working state
 # --------------------------------------------------------------------------
-def _declarar_en_lavado(db) -> None:
-    """``en_atencion -> en_lavado -> finalizado``, insertado como dato."""
+def _declarar_encerado(db) -> None:
+    """``acabado -> encerado -> finalizado``, insertado como dato."""
     db.add(
         TransicionEstado(
-            estado_origen="en_atencion",
-            estado_destino="en_lavado",
+            estado_origen="acabado",
+            estado_destino="encerado",
             permiso_requerido="reserva:avanzar_estado",
             endpoint=None,
             marca_fin_servicio=False,
@@ -435,7 +512,7 @@ def _declarar_en_lavado(db) -> None:
     )
     db.add(
         TransicionEstado(
-            estado_origen="en_lavado",
+            estado_origen="encerado",
             estado_destino="finalizado",
             permiso_requerido="reserva:avanzar_estado",
             endpoint=None,
@@ -446,51 +523,88 @@ def _declarar_en_lavado(db) -> None:
 
 
 def test_buscar_encuentra_reserva_en_estado_nuevo(
-    api_cliente, api_personal, db, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, api_operario, db, servicio_medio, vehiculo_id
 ):
     """RF-019: el personal encuentra un servicio en curso, esté en el estado
     que esté. Antes de C3 un estado nuevo era invisible en la búsqueda."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    _check_in(api_personal, reserva["id"])
-    _declarar_en_lavado(db)
+    _check_in(api_recepcion, reserva["id"])
+    forzar_estado(db, reserva["id"], "asignado")
+    for estado in ("en_lavado", "secado", "acabado"):
+        assert avanzar_estado(api_operario, reserva["id"], estado).status_code == 200
+    _declarar_encerado(db)
 
-    assert _estado_generico(api_personal, reserva["id"], "en_lavado").status_code == 200
+    assert avanzar_estado(api_operario, reserva["id"], "encerado").status_code == 200
 
-    respuesta = api_personal.get(f"{RUTA}/reservas/buscar", params={"codigo": reserva["codigo"]})
+    respuesta = api_recepcion.get(f"{RUTA}/reservas/buscar", params={"codigo": reserva["codigo"]})
 
     assert respuesta.status_code == 200, respuesta.text
     assert [item["id"] for item in respuesta.json()["items"]] == [reserva["id"]]
 
 
 # --------------------------------------------------------------------------
-# C4 - state catalogue
+# C4 - state catalogue (Anexo A v1.0)
 # --------------------------------------------------------------------------
-def test_catalogo_de_estados_incluye_estado_insertado_como_dato(api_personal, db):
+def test_el_catalogo_expone_los_once_estados_del_anexo_a(api_recepcion):
+    """Anexo A v1.0: once estados, y ``en_atencion`` ya no está."""
+    items = {item["codigo"] for item in api_recepcion.get(f"{RUTA}/estados").json()["items"]}
+
+    assert items == {estado.value for estado in EstadoReserva}
+    assert len(items) == 11
+    assert "en_atencion" not in items
+
+
+def test_la_tabla_declara_las_transiciones_del_anexo_a(db):
+    """Las catorce filas del Anexo A v1.0, con su dueño y su marca de fin.
+
+    Las otras cuatro transiciones del anexo no son filas: dos son la creación
+    de la reserva (no hay estado de origen) y dos son los sumideros terminales,
+    que se derivan de la ausencia de filas salientes.
+    """
+    filas = db.scalars(select(TransicionEstado)).all()
+    declaradas = {(fila.estado_origen, fila.estado_destino): fila for fila in filas}
+
+    assert len(filas) == 14
+    assert declaradas[("confirmada", "en_recepcion")].endpoint == "check_in"
+    assert declaradas[("en_recepcion", "asignado")].endpoint == "asignacion"
+    assert declaradas[("en_recepcion", "asignado")].permiso_requerido == "reserva:asignar"
+    assert declaradas[("finalizado", "en_revision")].permiso_requerido == "reserva:revisar"
+    assert declaradas[("en_revision", "entregado")].endpoint == "check_out"
+
+    # RF-022 CA-02: el fin del servicio lo marca ``acabado -> finalizado``, y
+    # ninguna otra fila.
+    con_fin = {
+        (fila.estado_origen, fila.estado_destino) for fila in filas if fila.marca_fin_servicio
+    }
+    assert con_fin == {("acabado", "finalizado")}
+
+
+def test_catalogo_de_estados_incluye_estado_insertado_como_dato(api_recepcion, db):
     """P3: la pantalla agregada del móvil se dibuja desde este catálogo."""
-    antes = {item["codigo"] for item in api_personal.get(f"{RUTA}/estados").json()["items"]}
-    assert "en_lavado" not in antes
+    antes = {item["codigo"] for item in api_recepcion.get(f"{RUTA}/estados").json()["items"]}
+    assert "encerado" not in antes
 
-    _declarar_en_lavado(db)
+    _declarar_encerado(db)
 
-    respuesta = api_personal.get(f"{RUTA}/estados")
+    respuesta = api_recepcion.get(f"{RUTA}/estados")
 
     assert respuesta.status_code == 200, respuesta.text
     items = {item["codigo"]: item for item in respuesta.json()["items"]}
-    assert "en_lavado" in items
-    assert items["en_lavado"]["terminal"] is False
-    # Queda entre en_atencion y finalizado, que es por donde se declaró.
-    assert items["en_atencion"]["orden"] < items["en_lavado"]["orden"]
-    assert items["en_lavado"]["orden"] < items["finalizado"]["orden"]
+    assert "encerado" in items
+    assert items["encerado"]["terminal"] is False
+    # Queda entre acabado y finalizado, que es por donde se declaró.
+    assert items["acabado"]["orden"] < items["encerado"]["orden"]
+    assert items["encerado"]["orden"] < items["finalizado"]["orden"]
 
 
-def test_catalogo_marca_terminales_correctamente(api_personal):
+def test_catalogo_marca_terminales_correctamente(api_recepcion):
     """Terminal = ninguna transición sale de ese estado. No hay lista en código."""
-    items = {item["codigo"]: item for item in api_personal.get(f"{RUTA}/estados").json()["items"]}
+    items = {item["codigo"]: item for item in api_recepcion.get(f"{RUTA}/estados").json()["items"]}
 
     assert items["entregado"]["terminal"] is True
     assert items["cancelada"]["terminal"] is True
     assert items["confirmada"]["terminal"] is False
-    assert items["en_atencion"]["terminal"] is False
+    assert items["en_lavado"]["terminal"] is False
     assert items["finalizado"]["terminal"] is False, "RF-024 CA-02: aún falta entregar"
 
 
@@ -501,19 +615,64 @@ def test_el_catalogo_de_estados_requiere_token(cliente_http):
 
 
 # --------------------------------------------------------------------------
+# P3 by code inspection, the twin of RF-004 CA-03 for the state machine
+# --------------------------------------------------------------------------
+def _estados_en_comparaciones(arbol: ast.AST) -> list[str]:
+    """State names used inside any comparison of a module."""
+    nombres = {estado.value for estado in EstadoReserva}
+    encontradas: list[str] = []
+    for nodo in ast.walk(arbol):
+        if not isinstance(nodo, ast.Compare):
+            continue
+        for operando in [nodo.left, *nodo.comparators]:
+            for hijo in ast.walk(operando):
+                if (
+                    isinstance(hijo, ast.Constant)
+                    and isinstance(hijo.value, str)
+                    and hijo.value in nombres
+                ):
+                    encontradas.append(hijo.value)
+    return encontradas
+
+
+def test_ningun_modulo_compara_el_nombre_de_un_estado():
+    """EXTENSION POINT P3: la máquina de estados vive en la tabla.
+
+    El gemelo de ``RF-004 CA-03`` para los estados: si un servicio comparase
+    con un estado concreto, añadir un estado dejaría de ser insertar una fila.
+    ``app/seed.py`` (que siembra la tabla) y ``app/models/enums.py`` (que solo
+    deletrea el vocabulario) son las dos excepciones.
+    """
+    permitidos = {RAIZ_APP / "seed.py", RAIZ_APP / "models" / "enums.py"}
+    revisados = 0
+    infracciones: list[str] = []
+
+    for archivo in sorted(RAIZ_APP.rglob("*.py")):
+        if archivo in permitidos:
+            continue
+        revisados += 1
+        arbol = ast.parse(archivo.read_text(encoding="utf-8"))
+        for nombre in _estados_en_comparaciones(arbol):
+            infracciones.append(f"{archivo.relative_to(RAIZ_APP)}: compara con «{nombre}»")
+
+    assert revisados > 10, "el recorrido debería cubrir todo el paquete"
+    assert infracciones == []
+
+
+# --------------------------------------------------------------------------
 # C9 - what check-in and check-out recorded is readable again
 # --------------------------------------------------------------------------
 def test_las_observaciones_del_ingreso_solo_las_ve_el_personal(
-    api_cliente, api_personal, servicio_medio, vehiculo_id
+    api_cliente, api_recepcion, servicio_medio, vehiculo_id
 ):
     """Nota interna del taller: la ve quien tiene ``reserva:leer_todas``."""
     reserva = _reserva_confirmada(api_cliente, servicio_medio, vehiculo_id)
-    _check_in(api_personal, reserva["id"])
+    _check_in(api_recepcion, reserva["id"])
 
-    del_personal = api_personal.get(f"{RUTA}/reservas/{reserva['id']}").json()
+    del_recepcion = api_recepcion.get(f"{RUTA}/reservas/{reserva['id']}").json()
     del_cliente = api_cliente.get(f"{RUTA}/reservas/{reserva['id']}").json()
 
-    assert del_personal["observaciones_ingreso"] == "Rayón leve en la puerta"
+    assert del_recepcion["observaciones_ingreso"] == "Rayón leve en la puerta"
     assert del_cliente["observaciones_ingreso"] is None
     # La conformidad es la respuesta del propio cliente: la ve todo el mundo.
     assert "conformidad_cliente" in del_cliente

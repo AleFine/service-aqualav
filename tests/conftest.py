@@ -121,9 +121,21 @@ def api_cliente(cliente_http):
 
 
 @pytest.fixture()
-def api_personal(cliente_http):
-    """Authenticated as the demo counter staff."""
-    return _autenticar(cliente_http, settings.seed_personal_correo, settings.seed_personal_password)
+def api_recepcion(cliente_http):
+    """Authenticated as the demo receptionist.
+
+    RF-004 v1.0 splits the MVP role ``personal`` in two: the counter
+    (check-in, assignment, charge, delivery) and the bay (state advance).
+    """
+    return _autenticar(
+        cliente_http, settings.seed_recepcion_correo, settings.seed_recepcion_password
+    )
+
+
+@pytest.fixture()
+def api_operario(cliente_http):
+    """Authenticated as the demo bay operator (RF-021)."""
+    return _autenticar(cliente_http, settings.seed_operario_correo, settings.seed_operario_password)
 
 
 @pytest.fixture()
@@ -153,13 +165,25 @@ def servicio_medio(db) -> Servicio:
     return _servicio(db, "Lavado Completo")
 
 
+def _usuario(db, correo: str) -> Usuario:
+    usuario = db.scalars(select(Usuario).where(Usuario.correo == correo)).first()
+    assert usuario is not None, f"El seed debería crear «{correo}»"
+    return usuario
+
+
 @pytest.fixture()
 def usuario_cliente(db) -> Usuario:
-    usuario = db.scalars(
-        select(Usuario).where(Usuario.correo == settings.seed_cliente_correo)
-    ).first()
-    assert usuario is not None
-    return usuario
+    return _usuario(db, settings.seed_cliente_correo)
+
+
+@pytest.fixture()
+def usuario_operario(db) -> Usuario:
+    return _usuario(db, settings.seed_operario_correo)
+
+
+@pytest.fixture()
+def usuario_admin(db) -> Usuario:
+    return _usuario(db, settings.seed_admin_correo)
 
 
 @pytest.fixture()
@@ -206,6 +230,55 @@ def crear_reserva(api: TestClient, servicio_id: int, vehiculo_id: int, inicio: d
 def codigo_error(respuesta) -> str:
     """The ``error.codigo`` of a uniform error body."""
     return respuesta.json()["error"]["codigo"]
+
+
+#: The bay chain of Annex A v1.0 (RF-021): what the operator walks through
+#: after the receptionist assigns the service.
+ESTADOS_DE_BAHIA = ("en_lavado", "secado", "acabado", "finalizado")
+
+
+def forzar_estado(db, reserva_id: int, estado: str, autor_id: int | None = None) -> None:
+    """Put a reservation in a state whose owning operation is not built yet.
+
+    ``en_recepcion -> asignado`` belongs to ``POST /reservas/{id}/asignacion``
+    (RF-020), which INC-1B implements. Until that endpoint exists this is the
+    only honest way to exercise what happens AFTER the assignment: the same
+    trick the late-arrival test uses to insert a reservation the API would
+    never create. The history row is written too, so the timeline stays whole.
+    """
+    from app.models import Reserva, ReservaEstadoHistorial
+
+    reserva = db.get(Reserva, reserva_id)
+    assert reserva is not None
+    reserva.estado = estado
+    db.add(ReservaEstadoHistorial(reserva_id=reserva_id, estado=estado, autor_id=autor_id))
+    db.commit()
+
+
+def avanzar_estado(api, reserva_id: int, estado: str):
+    """``POST /reservas/{id}/estado``: the generic move of RF-021."""
+    return api.post(f"{RUTA}/reservas/{reserva_id}/estado", json={"estado": estado})
+
+
+def llevar_hasta_finalizado(
+    api_recepcion, api_operario, db, reserva_id: int, autor_id: int | None = None
+) -> None:
+    """Walk a confirmed reservation down the whole v1.0 operative chain.
+
+    ``confirmada -> en_recepcion -> asignado -> en_lavado -> secado -> acabado
+    -> finalizado``: the check-in and the four bay moves go through the API,
+    the assignment is forced (see :func:`forzar_estado`).
+    """
+    respuesta = api_recepcion.post(
+        f"{RUTA}/reservas/{reserva_id}/check-in", json={"confirmar_retraso": False}
+    )
+    assert respuesta.status_code == 200, respuesta.text
+
+    forzar_estado(db, reserva_id, "asignado", autor_id)
+
+    for estado in ESTADOS_DE_BAHIA:
+        respuesta = avanzar_estado(api_operario, reserva_id, estado)
+        assert respuesta.status_code == 200, respuesta.text
 
 
 def dejar_una_sola_bahia(db) -> None:

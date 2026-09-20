@@ -138,7 +138,7 @@ def test_disponibilidad_requiere_token(cliente_http, servicio_corto):
 
 
 def test_estado_insertado_como_dato_ocupa_bahia(
-    api_cliente, api_personal, db, servicio_corto, vehiculo_id
+    api_cliente, api_recepcion, api_operario, db, servicio_corto, vehiculo_id
 ):
     """RN-03 / EXTENSION POINT P3.
 
@@ -160,16 +160,18 @@ def test_estado_insertado_como_dato_ocupa_bahia(
         )
 
     reserva = crear_reserva(api_cliente, servicio_corto.id, vehiculo_id, inicio).json()
-    api_personal.post(
+    api_recepcion.post(
         f"{RUTA}/reservas/{reserva['id']}/check-in", json={"confirmar_retraso": False}
     )
-    ocupadas_en_atencion = libres()
-    assert ocupadas_en_atencion == 3, "una de las cuatro bahías está tomada"
+    ocupadas_en_recepcion = libres()
+    assert ocupadas_en_recepcion == 3, "una de las cuatro bahías está tomada"
 
+    # Una parada intermedia que el Anexo A no contempla: el coche espera en la
+    # bahía a que se libere un operario.
     db.add(
         TransicionEstado(
-            estado_origen="en_atencion",
-            estado_destino="en_lavado",
+            estado_origen="en_recepcion",
+            estado_destino="en_espera",
             permiso_requerido="reserva:avanzar_estado",
             endpoint=None,
             marca_fin_servicio=False,
@@ -177,18 +179,18 @@ def test_estado_insertado_como_dato_ocupa_bahia(
     )
     db.add(
         TransicionEstado(
-            estado_origen="en_lavado",
-            estado_destino="finalizado",
+            estado_origen="en_espera",
+            estado_destino="asignado",
             permiso_requerido="reserva:avanzar_estado",
             endpoint=None,
-            marca_fin_servicio=True,
+            marca_fin_servicio=False,
         )
     )
     db.commit()
 
-    avance = api_personal.post(
-        f"{RUTA}/reservas/{reserva['id']}/estado", json={"estado": "en_lavado"}
+    avance = api_operario.post(
+        f"{RUTA}/reservas/{reserva['id']}/estado", json={"estado": "en_espera"}
     )
     assert avance.status_code == 200, avance.text
 
-    assert libres() == ocupadas_en_atencion, "el coche sigue dentro: la bahía no se libera"
+    assert libres() == ocupadas_en_recepcion, "el coche sigue dentro: la bahía no se libera"

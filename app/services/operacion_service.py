@@ -2,8 +2,14 @@
 
 RF-021 is the requirement the whole extension story hangs from. The allowed
 moves are READ FROM ``transicion_estado`` on every attempt (EXTENSION POINT
-P3): growing to the eleven states of v1.0 is a data migration, not a code
-change, and nothing in this module may enumerate the transitions.
+P3): growing to the eleven states of v1.0 WAS a data migration
+(``0003_estados_roles_v1``) and not a code change, and nothing in this module
+may enumerate the transitions.
+
+Both ends of every move are data. An operation such as the check-in knows its
+own NAME (the value stored in ``transicion_estado.endpoint``) and asks the
+table where that name leads from the current state, so a state that is renamed,
+split or inserted never reaches this file.
 
 Every state change - including the ones check-in and check-out perform - goes
 through :func:`cambiar_estado`, so the history row (P7) and the domain event
@@ -39,6 +45,14 @@ TOLERANCIA_RETRASO = timedelta(minutes=20)
 #: no invariant of its own, so it may only perform moves declared with no owner.
 ENDPOINT_GENERICO = "estado"
 
+#: Names of the operations that OWN a move. They are the value stored in
+#: ``transicion_estado.endpoint``, and they are the only thing these operations
+#: know about the state machine: the destination of each one is looked up in the
+#: table (see :func:`destino_declarado`), never written down here.
+ENDPOINT_CHECK_IN = "check_in"
+ENDPOINT_CHECK_OUT = "check_out"
+ENDPOINT_CANCELACION = "cancelacion"
+
 
 def transiciones_permitidas(db: Session, reserva: Reserva, permisos: list[str]) -> list[str]:
     """States this reservation can move to, for this caller.
@@ -57,6 +71,52 @@ def transiciones_permitidas(db: Session, reserva: Reserva, permisos: list[str]) 
 
 def _normalizar(destino: str) -> str:
     return destino.value if isinstance(destino, EstadoReserva) else str(destino)
+
+
+def destino_declarado(db: Session, reserva: Reserva, endpoint: str) -> str:
+    """The state ``endpoint`` moves this reservation to, read from the table.
+
+    EXTENSION POINT P3, the half the MVP was still missing. The ORIGIN of every
+    move was already data, but the DESTINATION was a literal inside each
+    operation (``check_in`` wrote ``en_atencion``, ``check_out`` wrote
+    ``entregado``), so Annex A v1.0 could not rename or split a state without
+    editing the service layer. Now both ends live in ``transicion_estado``:
+    check-in lands on ``en_recepcion`` because the row says so, and the
+    check-out of a reservation coming back from ``en_revision`` needs no branch.
+
+    Raises ``TransicionInvalida`` (422) when the table declares no move owned by
+    this operation leaving the current state - which is what answers the
+    check-in of an already attended reservation (RF-019 CA-02) and the check-out
+    of a service that is not finished yet (RF-024).
+    """
+    candidatas = [
+        transicion
+        for transicion in transicion_repo.listar_por_origen(db, reserva.estado)
+        if transicion.endpoint == endpoint
+    ]
+
+    if not candidatas:
+        raise TransicionInvalida(
+            detalles=[
+                detalle(
+                    "estado",
+                    f"La reserva está en «{reserva.estado}» y esta operación no aplica "
+                    "a ese estado.",
+                )
+            ]
+        )
+
+    if len(candidatas) > 1:
+        # The table is data and may be edited: refuse to guess rather than pick
+        # one destination and silently skip the other.
+        destinos = ", ".join(sorted(transicion.estado_destino for transicion in candidatas))
+        raise TransicionInvalida(
+            "Esa operación tiene más de un destino declarado para el estado actual, "
+            "así que no puede decidir por sí sola. Revisa la tabla de transiciones.",
+            detalles=[detalle("estado", f"Destinos declarados: {destinos}.")],
+        )
+
+    return candidatas[0].estado_destino
 
 
 def validar_transicion(
@@ -229,19 +289,21 @@ def check_in(
     asks for an explicit confirmation when the customer is more than twenty
     minutes late (flow 3a).
 
-    LIMITATION: the DESTINATION is still fixed here, because it is what "check
-    in" means. If v0.4 replaces ``en_atencion`` by ``en_lavado/secado/acabado``
-    as Annex A plans, this line has to be revisited. The ORIGIN is not fixed:
-    which states may be checked in from is read from ``transicion_estado``.
+    Neither end of the move is written here any more: the table says which
+    states may be checked in from AND where the check-in lands (P3). That is
+    what let v1.0 replace ``en_atencion`` by ``en_recepcion`` as a data
+    migration, with no change in this function.
     """
+    destino = destino_declarado(db, reserva, ENDPOINT_CHECK_IN)
+
     # Validated before the delay check so an already attended reservation gets
     # 422 TRANSICION_INVALIDA (CA-02) rather than the delay confirmation.
     validar_transicion(
         db,
         reserva,
-        EstadoReserva.EN_ATENCION.value,
+        destino,
         permisos,
-        origen_llamada="check_in",
+        origen_llamada=ENDPOINT_CHECK_IN,
     )
 
     retraso = minutos_de_retraso(reserva)
@@ -259,10 +321,10 @@ def check_in(
     return cambiar_estado(
         db,
         reserva,
-        EstadoReserva.EN_ATENCION.value,
+        destino,
         autor,
         permisos,
-        origen_llamada="check_in",
+        origen_llamada=ENDPOINT_CHECK_IN,
         accion=eventos.RESERVA_CHECK_IN,
         datos={"minutos_retraso": retraso, "confirmar_retraso": bool(datos.confirmar_retraso)},
         notificador=notificador,
@@ -283,18 +345,20 @@ def check_out(
     RN-09: the service must be finished AND the payment confirmed. A pending
     payment blocks the delivery with 422 ``PAGO_PENDIENTE`` (CA-01).
 
-    The same LIMITATION as :func:`check_in` applies to the destination.
+    Like the check-in, both ends of the move are data: v1.0 added a second
+    origin (``en_revision``, RF-024 flow 3a) as a row, not as a branch.
     """
-    # "Finished" is the declared move into the delivery state, not a state
-    # literal: the transition table says which origins may be delivered from.
-    # Validated first so a reservation that is not ready to be handed back is
-    # refused with 422 TRANSICION_INVALIDA instead of PAGO_PENDIENTE.
+    # "Ready to be handed back" is the declared move out of the current state,
+    # not a state literal. Validated first so a reservation that is not ready
+    # is refused with 422 TRANSICION_INVALIDA instead of PAGO_PENDIENTE.
+    destino = destino_declarado(db, reserva, ENDPOINT_CHECK_OUT)
+
     validar_transicion(
         db,
         reserva,
-        EstadoReserva.ENTREGADO.value,
+        destino,
         permisos,
-        origen_llamada="check_out",
+        origen_llamada=ENDPOINT_CHECK_OUT,
     )
 
     if pago_repo.obtener_confirmado(db, reserva.id) is None:
@@ -308,10 +372,10 @@ def check_out(
     return cambiar_estado(
         db,
         reserva,
-        EstadoReserva.ENTREGADO.value,
+        destino,
         autor,
         permisos,
-        origen_llamada="check_out",
+        origen_llamada=ENDPOINT_CHECK_OUT,
         accion=eventos.RESERVA_CHECK_OUT,
         datos={"conformidad_cliente": bool(datos.conformidad_cliente)},
         notificador=notificador,

@@ -15,7 +15,7 @@ from tests.conftest import RUTA, codigo_error
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent / "app"
 ARCHIVO_DEL_SEED = RAIZ / "seed.py"
-NOMBRES_DE_ROL = {"cliente", "personal", "administrador"}
+NOMBRES_DE_ROL = {"cliente", "recepcionista", "operario", "administrador"}
 
 RECURSOS_PROTEGIDOS = [
     ("get", f"{RUTA}/vehiculos"),
@@ -61,9 +61,9 @@ def test_un_cliente_en_un_recurso_de_administracion_responde_403(api_cliente):
     assert codigo_error(respuesta) == "PERMISO_DENEGADO"
 
 
-def test_el_personal_no_puede_crear_reservas(api_personal, servicio_medio):
-    """El personal no tiene ``reserva:crear``; la autorización no mira el rol."""
-    respuesta = api_personal.post(
+def test_el_recepcionista_no_puede_crear_reservas(api_recepcion, servicio_medio):
+    """El mostrador no tiene ``reserva:crear``; la autorización no mira el rol."""
+    respuesta = api_recepcion.post(
         f"{RUTA}/reservas",
         json={
             "servicio_id": servicio_medio.id,

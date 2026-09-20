@@ -3,7 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Rol, Usuario
+from app.models import Permiso, Rol, Usuario
 
 
 def obtener_por_id(db: Session, usuario_id: int) -> Usuario | None:
@@ -36,6 +36,28 @@ def obtener_rol(db: Session, nombre: str) -> Rol | None:
     """Resolve a role by its natural key. The caller supplies the name."""
     consulta = select(Rol).where(Rol.nombre == nombre).options(selectinload(Rol.permisos))
     return db.scalars(consulta).first()
+
+
+def obtener_rol_por_id(db: Session, rol_id: int) -> Rol | None:
+    """Resolve a role by id, with its permissions attached (RF-004 step 3).
+
+    The role administration addresses a role by id on purpose: the payload of
+    ``PUT /admin/usuarios/{id}/rol`` therefore never carries a role NAME, so no
+    client can grow a branch on one either (principle P5).
+    """
+    consulta = select(Rol).where(Rol.id == rol_id).options(selectinload(Rol.permisos))
+    return db.scalars(consulta).first()
+
+
+def listar_roles(db: Session) -> list[Rol]:
+    """Every role with its permissions, for the administration screen (RF-004)."""
+    consulta = select(Rol).options(selectinload(Rol.permisos)).order_by(Rol.id)
+    return list(db.scalars(consulta).all())
+
+
+def listar_permisos(db: Session) -> list[Permiso]:
+    """Every permission code the system knows about (RF-004 step 2)."""
+    return list(db.scalars(select(Permiso).order_by(Permiso.codigo)).all())
 
 
 def crear(

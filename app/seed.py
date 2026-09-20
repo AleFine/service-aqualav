@@ -46,16 +46,26 @@ PERMISOS: dict[str, str] = {
     "reserva:leer_todas": "Consultar las reservas de todos los clientes.",
     "reserva:cancelar": "Cancelar una reserva.",
     "reserva:check_in": "Registrar el ingreso del vehículo.",
+    "reserva:asignar": "Asignar una bahía y un operario a un servicio.",
     "reserva:avanzar_estado": "Avanzar el estado de una reserva.",
+    "reserva:revisar": "Registrar la observación del cliente y enviar el servicio a revisión.",
     "reserva:check_out": "Registrar la entrega del vehículo.",
     "pago:registrar": "Registrar el pago de una reserva.",
+    "agenda:leer": "Consultar la agenda diaria y semanal por bahía.",
+    "agenda:administrar": "Bloquear franjas, feriados y horarios de atención.",
+    "usuario:administrar": "Crear, editar, activar y desactivar usuarios internos.",
+    "rol:administrar": "Consultar roles y permisos y asignar el rol de un usuario.",
+    "bahia:administrar": "Crear, editar y desactivar bahías.",
 }
 
-#: role name -> Spanish description.
+#: role name -> Spanish description (RF-004 v1.0: four roles).
+#: ``personal`` of the MVP is SPLIT into ``recepcionista`` and ``operario``;
+#: migration ``0003`` reassigns the accounts that still hold it.
 ROLES: dict[str, str] = {
     "cliente": "Cliente que reserva servicios de lavado.",
-    "personal": "Personal de atención y operación del local.",
-    "administrador": "Administrador del catálogo y de la operación.",
+    "recepcionista": "Atiende el mostrador: recibe, asigna, cobra y entrega.",
+    "operario": "Ejecuta el servicio en la bahía y avanza su estado.",
+    "administrador": "Administrador del catálogo, la operación y los accesos.",
 }
 
 #: Role every self-registered account gets (RF-001 flow step 5).
@@ -74,14 +84,27 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
         "reserva:leer_propias",
         "reserva:cancelar",
     ),
-    "personal": (
+    # The counter: receives the vehicle, assigns it, charges it and hands it
+    # back. It does NOT advance the service inside the bay.
+    "recepcionista": (
         "servicio:leer",
+        "agenda:leer",
         "reserva:leer_todas",
         "reserva:cancelar",
         "reserva:check_in",
-        "reserva:avanzar_estado",
+        "reserva:asignar",
+        "reserva:revisar",
         "reserva:check_out",
         "pago:registrar",
+    ),
+    # The bay: advances the service through its operative states (RF-021).
+    # ``reserva:leer_todas`` is shared with the counter because an operator
+    # works on reservations that belong to a customer, not to themselves:
+    # without it every operative endpoint would answer 404.
+    "operario": (
+        "servicio:leer",
+        "reserva:leer_todas",
+        "reserva:avanzar_estado",
     ),
     # The administrator is a superset of every permission.
     "administrador": tuple(PERMISOS),
@@ -93,14 +116,48 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
 #: one, so no caller can reach a state while skipping the invariants and side
 #: effects that operation carries (RN-09, RF-024 CA-01, RF-016 CA-03). ``None``
 #: means the move has no extra rule and the generic endpoint may perform it.
+#:
+#: These are the eighteen transitions of Annex A v1.0 minus the four that are
+#: NOT rows by construction:
+#:
+#: * ``[*] -> pendiente_pago`` and ``[*] -> confirmada`` are CREATION. There is
+#:   no origin state to declare; ``POST /reservas`` picks the initial state from
+#:   the payment modality (RF-014 + RF-025).
+#: * ``entregado -> [*]`` and ``cancelada -> [*]`` are the two TERMINAL sinks.
+#:   Terminality is derived from the absence of outgoing rows
+#:   (``listar_estados_no_terminales``): inserting a sink row would make both
+#:   states look active again and they would never release their bay (RN-03).
+#:
+#: The remaining fourteen are rows, and every state of Annex A appears in at
+#: least one of them, which is what makes the catalogue of ``GET /estados``
+#: complete without a list of states anywhere in the code.
 TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
+    # 3. The gateway approves the online payment (RF-026). INC-4 implements the
+    #    owning operation; the row already refuses every other door.
+    (
+        EstadoReserva.PENDIENTE_PAGO.value,
+        EstadoReserva.CONFIRMADA.value,
+        "pago:registrar",
+        "pago",
+        False,
+    ),
+    # 4. The fifteen minute window expires, or the customer cancels (RF-016).
+    (
+        EstadoReserva.PENDIENTE_PAGO.value,
+        EstadoReserva.CANCELADA.value,
+        "reserva:cancelar",
+        "cancelacion",
+        False,
+    ),
+    # 5. Check-in (RF-019). v1.0 lands on "en recepción", not on "en atención".
     (
         EstadoReserva.CONFIRMADA.value,
-        EstadoReserva.EN_ATENCION.value,
+        EstadoReserva.EN_RECEPCION.value,
         "reserva:check_in",
         "check_in",
         False,
     ),
+    # 6. Cancellation before the vehicle arrives (RF-016).
     (
         EstadoReserva.CONFIRMADA.value,
         EstadoReserva.CANCELADA.value,
@@ -108,15 +165,84 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "cancelacion",
         False,
     ),
+    # 7. Bay and operator assignment (RF-020). INC-1B implements the operation.
     (
-        EstadoReserva.EN_ATENCION.value,
+        EstadoReserva.EN_RECEPCION.value,
+        EstadoReserva.ASIGNADO.value,
+        "reserva:asignar",
+        "asignacion",
+        False,
+    ),
+    # 8. v1.0 allows cancelling after the check-in; the MVP did not (RF-016).
+    (
+        EstadoReserva.EN_RECEPCION.value,
+        EstadoReserva.CANCELADA.value,
+        "reserva:cancelar",
+        "cancelacion",
+        False,
+    ),
+    # 9-12. The operator walks the service through the bay (RF-021). No owning
+    #       operation: these are exactly what the generic endpoint is for.
+    (
+        EstadoReserva.ASIGNADO.value,
+        EstadoReserva.EN_LAVADO.value,
+        "reserva:avanzar_estado",
+        None,
+        False,
+    ),
+    (
+        EstadoReserva.EN_LAVADO.value,
+        EstadoReserva.SECADO.value,
+        "reserva:avanzar_estado",
+        None,
+        False,
+    ),
+    (
+        EstadoReserva.SECADO.value,
+        EstadoReserva.ACABADO.value,
+        "reserva:avanzar_estado",
+        None,
+        False,
+    ),
+    # 12. Finishing the service is what stamps ``hora_fin_real`` and unlocks
+    #     the charge (RF-022 CA-02, RN-09): the flag moved here from
+    #     ``en_atencion -> finalizado`` without a single line of code changing.
+    (
+        EstadoReserva.ACABADO.value,
         EstadoReserva.FINALIZADO.value,
         "reserva:avanzar_estado",
         None,
         True,
     ),
+    # 13. Check-out (RF-024).
     (
         EstadoReserva.FINALIZADO.value,
+        EstadoReserva.ENTREGADO.value,
+        "reserva:check_out",
+        "check_out",
+        False,
+    ),
+    # 14. The customer objects to the result (RF-024 flow 3a). Its own owner so
+    #     the check-out never has two destinations to choose from; INC-1B wires
+    #     ``POST /reservas/{id}/revision`` to it.
+    (
+        EstadoReserva.FINALIZADO.value,
+        EstadoReserva.EN_REVISION.value,
+        "reserva:revisar",
+        "revision",
+        False,
+    ),
+    # 15. The operator reworks the vehicle (RF-021).
+    (
+        EstadoReserva.EN_REVISION.value,
+        EstadoReserva.ACABADO.value,
+        "reserva:avanzar_estado",
+        None,
+        False,
+    ),
+    # 16. The customer accepts after the review and takes the vehicle (RF-024).
+    (
+        EstadoReserva.EN_REVISION.value,
         EstadoReserva.ENTREGADO.value,
         "reserva:check_out",
         "check_out",
@@ -169,7 +295,8 @@ SERVICIOS: tuple[tuple[str, str, str, int, int], ...] = (
 #: (nombres, apellidos, telefono, rol, prefijo de las credenciales en settings)
 USUARIOS_DEMO: tuple[tuple[str, str, str, str, str], ...] = (
     ("Carla", "Quispe", "987000001", "administrador", "seed_admin"),
-    ("Luis", "Ramos", "987000002", "personal", "seed_personal"),
+    ("Luis", "Ramos", "987000002", "recepcionista", "seed_recepcion"),
+    ("Marco", "Huamán", "987000004", "operario", "seed_operario"),
     ("Ana", "Torres", "987000003", "cliente", "seed_cliente"),
 )
 

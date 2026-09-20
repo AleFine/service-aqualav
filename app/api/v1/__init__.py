@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    admin_roles,
     admin_servicios,
     auth,
     disponibilidad,
@@ -22,6 +23,7 @@ api_router.include_router(auth.router)
 api_router.include_router(vehiculos.router)
 api_router.include_router(servicios.router)
 api_router.include_router(admin_servicios.router)
+api_router.include_router(admin_roles.router)
 api_router.include_router(disponibilidad.router)
 api_router.include_router(estados.router)
 # ``operacion`` first: it owns the literal ``/reservas/buscar``, which would

@@ -104,6 +104,17 @@ class PermisoDenegado(AppError):
     )
 
 
+class CambioDeRolPropioDenegado(AppError):
+    """RF-004 flow 3a: nobody may take their own administration away."""
+
+    codigo = "CAMBIO_DE_ROL_PROPIO"
+    http_status = 422
+    mensaje = (
+        "No puedes quitarte a ti mismo la administración de roles: el local quedaría "
+        "sin quien administre los accesos. Pide a otro administrador que haga el cambio."
+    )
+
+
 # --------------------------------------------------------------------------
 # Vehicles
 # --------------------------------------------------------------------------
@@ -227,6 +238,7 @@ ERRORES_POR_CODIGO: dict[str, type[AppError]] = {
         CuentaBloqueada,
         NoAutenticado,
         PermisoDenegado,
+        CambioDeRolPropioDenegado,
         PlacaDuplicada,
         PlacaInvalida,
         ReservaAnticipacionInsuficiente,

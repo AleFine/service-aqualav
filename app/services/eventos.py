@@ -21,6 +21,11 @@ ENTIDAD_PAGO = "pago"
 
 # Actions (contract section 1, ``evento_dominio``).
 USUARIO_REGISTRADO = "usuario.registrado"
+#: RF-004 CA-02: the audit trail of a role change keeps author, date and the
+#: value BEFORE the change, which is why ``datos`` carries both values.
+USUARIO_ROL_CAMBIADO = "usuario.rol_cambiado"
+#: RF-004 flow 4a. Written by the hook INC-3 turns into a real revocation.
+USUARIO_TOKENS_REVOCADOS = "usuario.tokens_revocados"
 VEHICULO_REGISTRADO = "vehiculo.registrado"
 SERVICIO_CREADO = "servicio.creado"
 SERVICIO_ACTUALIZADO = "servicio.actualizado"

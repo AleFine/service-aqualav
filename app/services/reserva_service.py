@@ -123,6 +123,10 @@ def crear(
         bahia_id=libre.id,
         inicio=inicio_utc,
         fin=fin_utc,
+        # CREATION, the one edge of Annex A that is not a row in
+        # ``transicion_estado``: there is no origin state to look the move up
+        # by. A presential booking is born confirmed (transition 2); INC-4 adds
+        # the online branch, which is born ``pendiente_pago`` (transition 1).
         estado=EstadoReserva.CONFIRMADA.value,
         # RF-014 CA-03: the tariff is frozen here; a later price change
         # (EXTENSION POINT P6) never moves it.
@@ -212,23 +216,28 @@ def cancelar(
 ) -> tuple[Reserva, Dinero]:
     """Cancel a reservation and free its block (RF-016).
 
-    The move itself is validated against ``transicion_estado`` like any other,
-    so a reservation already ``en_atencion`` is refused with 422 (CA-02). The
-    penalty comes from the injected policy - always zero in the MVP.
+    Which states may still be cancelled from - and where the cancellation lands
+    - is read from ``transicion_estado`` (P3), so a reservation whose state no
+    longer declares the move is refused with 422 (CA-02) and v1.0 opening the
+    cancellation after the check-in (``en_recepcion``) was a row, not a branch.
+    The penalty comes from the injected policy - always zero in the MVP.
     """
     momento = ahora_utc()
     penalidad = politica.calcular_penalidad(reserva, momento)
     motivo_limpio = motivo.strip()
+    destino = operacion_service.destino_declarado(
+        db, reserva, operacion_service.ENDPOINT_CANCELACION
+    )
 
     # The transition is validated (and may be refused with 422) before any
     # cancellation field is touched, so a rejected attempt leaves no trace.
     operacion_service.cambiar_estado(
         db,
         reserva,
-        EstadoReserva.CANCELADA.value,
+        destino,
         autor,
         permisos,
-        origen_llamada="cancelacion",
+        origen_llamada=operacion_service.ENDPOINT_CANCELACION,
         accion=eventos.RESERVA_CANCELADA,
         datos={"motivo": motivo_limpio, "penalidad_centimos": penalidad.monto_centimos},
         notificador=notificador,

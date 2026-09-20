@@ -8,7 +8,7 @@ change, check-out and cancellation. Routers stay a parse/delegate/map sandwich.
 from sqlalchemy.orm import Session
 
 from app.core.horario import a_lima, desde_bd
-from app.models import EstadoPago, Pago, Reserva, Servicio, Usuario
+from app.models import EstadoPago, Pago, Permiso, Reserva, Rol, Servicio, Usuario
 from app.schemas import (
     BahiaResumen,
     CancelacionOut,
@@ -16,7 +16,9 @@ from app.schemas import (
     Dinero,
     HistorialItem,
     PagoOut,
+    PermisoOut,
     ReservaOut,
+    RolOut,
     ServicioOut,
     ServicioResumen,
     UsuarioOut,
@@ -31,6 +33,20 @@ def _autor(usuario: Usuario | None) -> str | None:
 
 def armar_usuario(usuario: Usuario) -> UsuarioOut:
     return UsuarioOut.model_validate(usuario)
+
+
+def armar_rol(rol: Rol) -> RolOut:
+    """``permisos`` is the sorted list of codes the role grants (RF-004)."""
+    return RolOut(
+        id=rol.id,
+        nombre=rol.nombre,
+        descripcion=rol.descripcion,
+        permisos=rol.codigos_permisos,
+    )
+
+
+def armar_permiso(permiso: Permiso) -> PermisoOut:
+    return PermisoOut.model_validate(permiso)
 
 
 def armar_servicio(servicio: Servicio) -> ServicioOut:
