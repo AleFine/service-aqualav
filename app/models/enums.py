@@ -68,6 +68,17 @@ class ModalidadPago(str, Enum):
     PRESENCIAL = "presencial"
 
 
+class TipoDescuento(str, Enum):
+    """How a promotion reduces the tariff (RF-011).
+
+    ``porcentaje`` reads ``Promocion.valor`` as percentage points (10 = 10 %);
+    ``monto`` reads it as integer cents, the same unit every amount uses (P6).
+    """
+
+    PORCENTAJE = "porcentaje"
+    MONTO = "monto"
+
+
 class EstadoCuenta(str, Enum):
     """EXTENSION POINT: v0.2 adds ``pendiente_verificacion``.
 
@@ -101,3 +112,8 @@ class MotivoBloqueo(str, Enum):
 
 #: Default currency for every amount in the MVP (RN-12: PEN, IGV included).
 MONEDA_PREDETERMINADA = "PEN"
+
+#: Neutral vehicle factor, in thousandths: 1000 = 1.0 (RN-04).
+#: Factors are integers on purpose - ``3000 x 1.3`` stops being ``3900`` the
+#: moment a float takes part, and RF-012 CA-01 is exactly that multiplication.
+FACTOR_BASE_MILESIMAS = 1000

@@ -20,6 +20,9 @@ ENTIDAD_RESERVA = "reserva"
 ENTIDAD_PAGO = "pago"
 ENTIDAD_BAHIA = "bahia"
 ENTIDAD_AGENDA = "agenda"
+ENTIDAD_PAQUETE = "paquete"
+ENTIDAD_PROMOCION = "promocion"
+ENTIDAD_ADICIONAL = "servicio_adicional"
 
 # Actions (contract section 1, ``evento_dominio``).
 USUARIO_REGISTRADO = "usuario.registrado"
@@ -39,6 +42,21 @@ VEHICULO_REGISTRADO = "vehiculo.registrado"
 SERVICIO_CREADO = "servicio.creado"
 SERVICIO_ACTUALIZADO = "servicio.actualizado"
 SERVICIO_PRECIO_CAMBIADO = "servicio.precio_cambiado"
+#: RF-010 v1.0 / RNF-014: changing a vehicle factor is a tariff change, so it
+#: is audited with the old and the new value, exactly like a price change.
+SERVICIO_FACTOR_CAMBIADO = "servicio.factor_cambiado"
+#: RF-011: packages, promotions and add-ons.
+PAQUETE_CREADO = "paquete.creado"
+PAQUETE_ACTUALIZADO = "paquete.actualizado"
+PROMOCION_CREADA = "promocion.creada"
+PROMOCION_ACTUALIZADA = "promocion.actualizada"
+ADICIONAL_CREADO = "servicio_adicional.creado"
+ADICIONAL_ACTUALIZADO = "servicio_adicional.actualizado"
+#: RF-012: the breakdown frozen into the reservation, and its two alternate
+#: flows - a coupon that was refused (3a) and a total clamped to zero (4a).
+TARIFA_CALCULADA = "tarifa.calculada"
+TARIFA_CUPON_RECHAZADO = "tarifa.cupon_rechazado"
+TARIFA_TOTAL_LIMITADO = "tarifa.total_limitado_a_cero"
 RESERVA_CREADA = "reserva.creada"
 RESERVA_CANCELADA = "reserva.cancelada"
 RESERVA_CHECK_IN = "reserva.check_in"

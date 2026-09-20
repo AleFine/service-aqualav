@@ -9,13 +9,13 @@ This is the ONLY place where role names appear (contract section 3): every
 authorization decision is taken on a permission code, never on a role name.
 """
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.horario import TRAMOS_RN07
+from app.core.horario import TRAMOS_RN07, ahora
 from app.core.security import hash_password
 from app.database import SessionLocal
 from app.models import (
@@ -23,11 +23,18 @@ from app.models import (
     EstadoBahia,
     EstadoCuenta,
     EstadoReserva,
+    FactorTipoVehiculo,
     HorarioAtencion,
+    Paquete,
+    PaqueteServicio,
     Permiso,
+    Promocion,
     Rol,
     Servicio,
+    ServicioAdicional,
     ServicioPrecio,
+    TipoDescuento,
+    TipoVehiculo,
     TransicionEstado,
     Usuario,
     Vehiculo,
@@ -59,6 +66,7 @@ PERMISOS: dict[str, str] = {
     "usuario:administrar": "Crear, editar, activar y desactivar usuarios internos.",
     "rol:administrar": "Consultar roles y permisos y asignar el rol de un usuario.",
     "bahia:administrar": "Crear, editar y desactivar bahías.",
+    "promocion:administrar": "Crear, editar y desactivar paquetes y promociones.",
 }
 
 #: role name -> Spanish description (RF-004 v1.0: four roles).
@@ -312,6 +320,80 @@ USUARIOS_DEMO: tuple[tuple[str, str, str, str, str], ...] = (
     ("Ana", "Torres", "987000003", "cliente", "seed_cliente"),
 )
 
+#: (nombre del servicio o None para el factor global, tipo de vehículo, milésimas)
+#: RN-04 as demo data: an SUV pays 1.3x everywhere, a motorbike 0.8x, and the
+#: express wash charges a motorbike even less because it barely takes the bay.
+#: RF-012 CA-01 is exactly the second row: 3000 x 1.3 = 3900.
+FACTORES: tuple[tuple[str | None, str, int], ...] = (
+    (None, TipoVehiculo.SEDAN.value, 1000),
+    (None, TipoVehiculo.SUV.value, 1300),
+    (None, TipoVehiculo.CAMIONETA.value, 1400),
+    (None, TipoVehiculo.MOTOCICLETA.value, 800),
+    ("Lavado Express", TipoVehiculo.MOTOCICLETA.value, 700),
+)
+
+#: (nombre, descripción, monto_centimos) - the "adicionales" term of RN-04.
+ADICIONALES: tuple[tuple[str, str, int], ...] = (
+    ("Aromatización", "Aroma de larga duración a elección del cliente.", 500),
+    ("Abrillantado de llantas", "Sellador y brillo para llantas y aros.", 800),
+    ("Shampoo de tapiz", "Lavado profundo de asientos y alfombras.", 1200),
+)
+
+#: (nombre, descripción, precio_centimos, ((servicio, cantidad), ...)) - RF-011.
+PAQUETES: tuple[tuple[str, str, int, tuple[tuple[str, int], ...]], ...] = (
+    (
+        "Pack Brillo Total",
+        "Lavado completo más lavado con encerado, a precio preferencial.",
+        6000,
+        (("Lavado Completo", 1), ("Lavado + Encerado", 1)),
+    ),
+)
+
+#: RF-011 demo promotions, dated RELATIVE to the day the seed runs so the
+#: catalogue always shows one in force and one expired, whenever it is run.
+#: (nombre, descripción, servicio, tipo_descuento, valor, cupón, desde, hasta)
+DIAS_PROMO_PASADA = 365
+DIAS_PROMO_VENCIDA = 30
+DIAS_PROMO_FUTURA = 60
+DIAS_CUPON = 180
+
+
+def promociones_demo(hoy: date) -> tuple[dict, ...]:
+    """The three promotions the demo catalogue needs, anchored on ``hoy``."""
+    return (
+        {
+            "nombre": "Verano Premium",
+            "descripcion": "15 % de descuento en el lavado con encerado.",
+            "servicio": "Lavado + Encerado",
+            "tipo_descuento": TipoDescuento.PORCENTAJE.value,
+            "valor": 15,
+            "codigo_cupon": None,
+            "vigente_desde": hoy - timedelta(days=DIAS_PROMO_VENCIDA),
+            "vigente_hasta": hoy + timedelta(days=DIAS_PROMO_FUTURA),
+        },
+        {
+            "nombre": "Aniversario AquaLav",
+            "descripcion": "20 % de descuento en el detallado interior. Promoción cerrada.",
+            "servicio": "Detallado Interior",
+            "tipo_descuento": TipoDescuento.PORCENTAJE.value,
+            "valor": 20,
+            "codigo_cupon": None,
+            "vigente_desde": hoy - timedelta(days=DIAS_PROMO_PASADA),
+            "vigente_hasta": hoy - timedelta(days=DIAS_PROMO_VENCIDA),
+        },
+        {
+            "nombre": "Bienvenida AquaLav",
+            "descripcion": "10 % de descuento con el cupón de bienvenida.",
+            "servicio": None,
+            "tipo_descuento": TipoDescuento.PORCENTAJE.value,
+            "valor": 10,
+            "codigo_cupon": "BIENVENIDA10",
+            "vigente_desde": hoy - timedelta(days=DIAS_PROMO_VENCIDA),
+            "vigente_hasta": hoy + timedelta(days=DIAS_CUPON),
+        },
+    )
+
+
 #: Demo vehicle attached to the demo customer.
 VEHICULO_DEMO = {
     "placa": "ABC-123",
@@ -437,6 +519,119 @@ def _sembrar_servicios(db: Session) -> None:
     db.flush()
 
 
+def _servicios_por_nombre(db: Session) -> dict[str, Servicio]:
+    return {servicio.nombre: servicio for servicio in db.scalars(select(Servicio)).all()}
+
+
+def _sembrar_factores(db: Session) -> None:
+    """RN-04 demo factors. A pair that already has an open row is left alone."""
+    servicios = _servicios_por_nombre(db)
+    abiertos = {
+        (factor.servicio_id, factor.tipo_vehiculo)
+        for factor in db.scalars(
+            select(FactorTipoVehiculo).where(FactorTipoVehiculo.vigente_hasta.is_(None))
+        ).all()
+    }
+    momento = datetime.now(UTC)
+
+    for nombre_servicio, tipo, milesimas in FACTORES:
+        servicio = servicios.get(nombre_servicio) if nombre_servicio else None
+        if nombre_servicio and servicio is None:
+            continue
+        servicio_id = servicio.id if servicio else None
+        if (servicio_id, tipo) in abiertos:
+            continue
+        db.add(
+            FactorTipoVehiculo(
+                servicio_id=servicio_id,
+                tipo_vehiculo=tipo,
+                factor_milesimas=milesimas,
+                vigente_desde=momento,
+            )
+        )
+    db.flush()
+
+
+def _sembrar_adicionales(db: Session) -> None:
+    existentes = {fila.nombre for fila in db.scalars(select(ServicioAdicional)).all()}
+    for nombre, descripcion, monto in ADICIONALES:
+        if nombre not in existentes:
+            db.add(
+                ServicioAdicional(
+                    nombre=nombre,
+                    descripcion=descripcion,
+                    monto_centimos=monto,
+                    moneda="PEN",
+                    activo=True,
+                )
+            )
+    db.flush()
+
+
+def _sembrar_paquetes(db: Session) -> None:
+    servicios = _servicios_por_nombre(db)
+    existentes = {paquete.nombre for paquete in db.scalars(select(Paquete)).all()}
+
+    for nombre, descripcion, precio, lineas in PAQUETES:
+        if nombre in existentes:
+            continue
+        incluidos = [servicios[s] for s, _ in lineas if s in servicios]
+        if len(incluidos) != len(lineas):
+            continue
+        paquete = Paquete(
+            nombre=nombre,
+            descripcion=descripcion,
+            precio_centimos=precio,
+            moneda="PEN",
+            activo=True,
+            vigente_desde=VIGENCIA_HORARIO_INICIAL,
+        )
+        db.add(paquete)
+        db.flush()
+        for nombre_servicio, cantidad in lineas:
+            db.add(
+                PaqueteServicio(
+                    paquete_id=paquete.id,
+                    servicio_id=servicios[nombre_servicio].id,
+                    cantidad=cantidad,
+                )
+            )
+    db.flush()
+
+
+def _sembrar_promociones(db: Session) -> None:
+    """One promotion in force, one already expired and one coupon (RF-011).
+
+    The expired one is the point: nothing sweeps it, nothing deactivates it,
+    and the catalogue shows the regular price again because the calculation
+    compares its ``vigente_hasta`` against the service date (flow 4a).
+    """
+    servicios = _servicios_por_nombre(db)
+    existentes = {promocion.nombre for promocion in db.scalars(select(Promocion)).all()}
+
+    for datos in promociones_demo(ahora().date()):
+        if datos["nombre"] in existentes:
+            continue
+        nombre_servicio = datos["servicio"]
+        servicio = servicios.get(nombre_servicio) if nombre_servicio else None
+        if nombre_servicio and servicio is None:
+            continue
+        db.add(
+            Promocion(
+                nombre=datos["nombre"],
+                descripcion=datos["descripcion"],
+                tipo_descuento=datos["tipo_descuento"],
+                valor=datos["valor"],
+                servicio_id=servicio.id if servicio else None,
+                codigo_cupon=datos["codigo_cupon"],
+                vigente_desde=datos["vigente_desde"],
+                vigente_hasta=datos["vigente_hasta"],
+                activa=True,
+            )
+        )
+    db.flush()
+
+
 def _credenciales_demo(clave: str) -> tuple[str, str]:
     """Read the ``<clave>_correo`` / ``<clave>_password`` pair from settings."""
     return (
@@ -492,6 +687,10 @@ def ejecutar_seed(db: Session) -> None:
     _sembrar_bahias(db)
     _sembrar_horarios(db)
     _sembrar_servicios(db)
+    _sembrar_factores(db)
+    _sembrar_adicionales(db)
+    _sembrar_paquetes(db)
+    _sembrar_promociones(db)
     usuarios = _sembrar_usuarios(db, roles)
     _sembrar_vehiculo_demo(db, usuarios["cliente"])
     db.commit()

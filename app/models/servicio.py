@@ -25,6 +25,9 @@ class Servicio(Base):
     )
     # Always a multiple of 15 minutes: the availability grid depends on it.
     duracion_min: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: RF-009 v1.0: the reference picture the catalogue shows. A KEY or URL of
+    #: the simulated object storage, never the bytes themselves.
+    imagen_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
     activo: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )

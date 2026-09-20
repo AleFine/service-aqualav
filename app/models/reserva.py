@@ -24,6 +24,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.models.bahia import Bahia
     from app.models.pago import Pago
     from app.models.servicio import Servicio
+    from app.models.tarifa import ReservaAdicional, ReservaTarifaDesglose
     from app.models.usuario import Usuario
     from app.models.vehiculo import Vehiculo
 
@@ -138,6 +139,21 @@ class Reserva(Base):
         back_populates="reserva",
         cascade="all, delete-orphan",
         uselist=False,
+        lazy="selectin",
+    )
+    #: RF-012: why ``monto_centimos`` is what it is. Written once, at creation.
+    tarifa: Mapped[Optional["ReservaTarifaDesglose"]] = relationship(
+        "ReservaTarifaDesglose",
+        back_populates="reserva",
+        cascade="all, delete-orphan",
+        uselist=False,
+        lazy="selectin",
+    )
+    adicionales: Mapped[list["ReservaAdicional"]] = relationship(
+        "ReservaAdicional",
+        back_populates="reserva",
+        cascade="all, delete-orphan",
+        order_by="ReservaAdicional.id",
         lazy="selectin",
     )
 

@@ -8,6 +8,7 @@ from app.schemas.bahia import BahiaResumen
 from app.schemas.common import Dinero, nombre_de_autor
 from app.schemas.pago import PagoOut
 from app.schemas.servicio import ServicioResumen
+from app.schemas.tarifa import DesgloseOut
 from app.schemas.usuario import ClienteResumen
 from app.schemas.vehiculo import VehiculoResumen
 
@@ -43,11 +44,19 @@ class CancelacionOut(BaseModel):
 
 
 class ReservaCrear(BaseModel):
-    """``fin`` is computed server side from the service duration."""
+    """``fin`` is computed server side from the service duration.
+
+    ``adicionales`` and ``cupon`` feed RN-04: the tariff is
+    ``(base x factor) + adicionales - descuentos`` and it is frozen into the
+    reservation when it is created (RF-012). An invalid coupon does NOT reject
+    the booking - it is reported inside the breakdown (flow 3a).
+    """
 
     servicio_id: int
     vehiculo_id: int
     inicio: datetime
+    adicionales: list[int] = Field(default_factory=list)
+    cupon: str | None = Field(default=None, max_length=30)
 
 
 class CancelacionIn(BaseModel):
@@ -106,6 +115,8 @@ class AtencionInmediataIn(BaseModel):
     servicio_id: int = Field(ge=1)
     vehiculo_id: int = Field(ge=1)
     observaciones: str | None = Field(default=None, max_length=500)
+    adicionales: list[int] = Field(default_factory=list)
+    cupon: str | None = Field(default=None, max_length=30)
 
 
 class ReservaOut(BaseModel):
@@ -146,5 +157,8 @@ class ReservaOut(BaseModel):
     cancelacion: CancelacionOut | None = None
     pago: PagoOut | None = None
     historial: list[HistorialItem] = Field(default_factory=list)
+    # RF-012: why ``monto`` is what it is, frozen when the reservation was
+    # created. Absent only on rows created before INC-2.
+    tarifa: DesgloseOut | None = None
     # Only present on the cancellation response (always zero in the MVP).
     penalidad: Dinero | None = None

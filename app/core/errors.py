@@ -274,6 +274,36 @@ class NombreDeBahiaDuplicado(AppError):
 
 
 # --------------------------------------------------------------------------
+# Tariffs, packages and promotions (RF-010, RF-011, RF-012)
+# --------------------------------------------------------------------------
+class PromocionSolapada(AppError):
+    """RF-011 flow 2a: two automatic promotions over the same target.
+
+    A 409 rather than a 422: the payload is perfectly valid, it is the CALENDAR
+    that is already taken, exactly like a booked block. The corrective action
+    is the one the requirement asks for - adjust the range.
+    """
+
+    codigo = "PROMOCION_SOLAPADA"
+    http_status = 409
+    mensaje = (
+        "Ya existe una promoción vigente para ese servicio en esas fechas. "
+        "Ajusta el rango de vigencia o desactiva la promoción que se solapa."
+    )
+
+
+class AdicionalNoDisponible(AppError):
+    """An add-on that exists but is no longer on sale (RN-04 "adicionales")."""
+
+    codigo = "ADICIONAL_NO_DISPONIBLE"
+    http_status = 422
+    mensaje = (
+        "Uno de los adicionales elegidos ya no está disponible. "
+        "Quítalo de la solicitud o elige otro."
+    )
+
+
+# --------------------------------------------------------------------------
 # Payments
 # --------------------------------------------------------------------------
 class PagoPendiente(AppError):
@@ -346,6 +376,8 @@ ERRORES_POR_CODIGO: dict[str, type[AppError]] = {
         UsuarioConServiciosEnCurso,
         LimiteDeBahias,
         NombreDeBahiaDuplicado,
+        PromocionSolapada,
+        AdicionalNoDisponible,
         PagoPendiente,
         IdempotencyKeyRequerida,
         RecursoNoEncontrado,

@@ -6,10 +6,12 @@ from app.api.v1 import (
     admin_bahias,
     admin_roles,
     admin_servicios,
+    admin_tarifas,
     admin_usuarios,
     agenda,
     asignacion,
     auth,
+    catalogo,
     disponibilidad,
     estados,
     health,
@@ -26,7 +28,9 @@ api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(vehiculos.router)
 api_router.include_router(servicios.router)
+api_router.include_router(catalogo.router)
 api_router.include_router(admin_servicios.router)
+api_router.include_router(admin_tarifas.router)
 api_router.include_router(admin_roles.router)
 api_router.include_router(admin_usuarios.router)
 api_router.include_router(admin_bahias.router)

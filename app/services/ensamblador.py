@@ -14,25 +14,38 @@ from app.models import (
     ColaEspera,
     DiaNoLaborable,
     EstadoPago,
+    FactorTipoVehiculo,
     Pago,
+    Paquete,
     Permiso,
+    Promocion,
     Reserva,
+    ReservaTarifaDesglose,
     Rol,
     Servicio,
+    ServicioAdicional,
     Usuario,
 )
 from app.schemas import (
+    AdicionalAplicadoOut,
+    AdicionalOut,
     AsignacionOut,
     BahiaOut,
     BahiaResumen,
     CancelacionOut,
     ClienteResumen,
     ColaEsperaOut,
+    DesgloseOut,
     DiaNoLaborableOut,
     Dinero,
+    FactorOut,
     HistorialItem,
     PagoOut,
+    PaqueteLineaOut,
+    PaqueteOut,
     PermisoOut,
+    PromocionOut,
+    PromocionResumen,
     ReservaOut,
     ResultadoAsignacionOut,
     RolOut,
@@ -42,7 +55,8 @@ from app.schemas import (
     UsuarioOut,
     VehiculoResumen,
 )
-from app.services import operacion_service, reserva_service
+from app.services import operacion_service, reserva_service, tarifa_service
+from app.services.tarifa_service import Desglose, PrecioAplicable
 
 
 def _autor(usuario: Usuario | None) -> str | None:
@@ -123,8 +137,13 @@ def armar_resultado_asignacion(
     )
 
 
-def armar_servicio(servicio: Servicio) -> ServicioOut:
-    """``precio`` is an object, never a bare number (RF-009 'cómo escala')."""
+def armar_servicio(servicio: Servicio, aplicable: PrecioAplicable | None = None) -> ServicioOut:
+    """``precio`` is an object, never a bare number (RF-009 'cómo escala').
+
+    ``aplicable`` is the RF-009 v1.0 delta: the price for the vehicle type the
+    caller asked about, plus the promotion the catalogue highlights beside the
+    regular one. Omitting it answers exactly what the MVP answered.
+    """
     precio = servicio.precio_vigente
     return ServicioOut(
         id=servicio.id,
@@ -133,11 +152,173 @@ def armar_servicio(servicio: Servicio) -> ServicioOut:
         categoria=servicio.categoria,
         duracion_min=servicio.duracion_min,
         activo=servicio.activo,
+        imagen_url=servicio.imagen_url,
         precio=(
             Dinero.de_centimos(precio.monto_centimos, precio.moneda)
             if precio is not None
             else Dinero.de_centimos(0)
         ),
+        tipo_vehiculo=aplicable.tipo_vehiculo if aplicable is not None else None,
+        factor_milesimas=aplicable.factor_milesimas if aplicable is not None else None,
+        precio_aplicable=(
+            Dinero.de_centimos(aplicable.monto_centimos, aplicable.moneda)
+            if aplicable is not None
+            else None
+        ),
+        promocion=(
+            PromocionResumen.model_validate(aplicable.promocion)
+            if aplicable is not None and aplicable.promocion is not None
+            else None
+        ),
+        precio_promocional=(
+            Dinero.de_centimos(aplicable.promocional_centimos, aplicable.moneda)
+            if aplicable is not None and aplicable.promocional_centimos is not None
+            else None
+        ),
+    )
+
+
+def armar_servicios(
+    servicios: list[Servicio], aplicables: dict[int, PrecioAplicable] | None = None
+) -> list[ServicioOut]:
+    aplicables = aplicables or {}
+    return [armar_servicio(servicio, aplicables.get(servicio.id)) for servicio in servicios]
+
+
+def armar_factor(factor: FactorTipoVehiculo) -> FactorOut:
+    """RF-010 v1.0: the factor screen names the service it belongs to."""
+    return FactorOut(
+        id=factor.id,
+        servicio_id=factor.servicio_id,
+        servicio=factor.servicio.nombre if factor.servicio is not None else None,
+        tipo_vehiculo=factor.tipo_vehiculo,
+        factor_milesimas=factor.factor_milesimas,
+        vigente_desde=a_lima(desde_bd(factor.vigente_desde)),
+    )
+
+
+def armar_adicional(adicional: ServicioAdicional) -> AdicionalOut:
+    return AdicionalOut(
+        id=adicional.id,
+        nombre=adicional.nombre,
+        descripcion=adicional.descripcion,
+        monto=Dinero.de_centimos(adicional.monto_centimos, adicional.moneda),
+        activo=adicional.activo,
+    )
+
+
+def armar_promocion(promocion: Promocion, *, vigente: bool = True) -> PromocionOut:
+    """RF-011. ``vigente`` is derived from today, never stored (flow 4a)."""
+    dias = tarifa_service.dias_de(promocion)
+    return PromocionOut(
+        id=promocion.id,
+        nombre=promocion.nombre,
+        descripcion=promocion.descripcion,
+        tipo_descuento=promocion.tipo_descuento,
+        valor=promocion.valor,
+        servicio_id=promocion.servicio_id,
+        paquete_id=promocion.paquete_id,
+        codigo_cupon=promocion.codigo_cupon,
+        dias_semana=sorted(dias) if dias else [],
+        vigente_desde=promocion.vigente_desde,
+        vigente_hasta=promocion.vigente_hasta,
+        activa=promocion.activa,
+        vigente=vigente,
+    )
+
+
+def armar_paquete(
+    paquete: Paquete,
+    *,
+    promocional_centimos: int | None = None,
+    promocion: Promocion | None = None,
+) -> PaqueteOut:
+    """RF-011: the bundle, its lines and what those lines cost separately."""
+    lineas = []
+    regular = 0
+    for linea in paquete.lineas:
+        precio = linea.servicio.precio_vigente
+        monto = precio.monto_centimos if precio is not None else 0
+        regular += monto * linea.cantidad
+        lineas.append(
+            PaqueteLineaOut(
+                servicio_id=linea.servicio_id,
+                nombre=linea.servicio.nombre,
+                cantidad=linea.cantidad,
+                precio=Dinero.de_centimos(monto, paquete.moneda),
+            )
+        )
+
+    return PaqueteOut(
+        id=paquete.id,
+        nombre=paquete.nombre,
+        descripcion=paquete.descripcion,
+        precio=Dinero.de_centimos(paquete.precio_centimos, paquete.moneda),
+        precio_regular=Dinero.de_centimos(regular, paquete.moneda),
+        precio_promocional=(
+            Dinero.de_centimos(promocional_centimos, paquete.moneda)
+            if promocional_centimos is not None
+            else None
+        ),
+        promocion=(PromocionResumen.model_validate(promocion) if promocion is not None else None),
+        activo=paquete.activo,
+        vigente_desde=paquete.vigente_desde,
+        vigente_hasta=paquete.vigente_hasta,
+        servicios=lineas,
+    )
+
+
+def armar_desglose(desglose: Desglose) -> DesgloseOut:
+    """RF-012: the quote, term by term, exactly as it was computed."""
+    return DesgloseOut(
+        precio_base=Dinero.de_centimos(desglose.precio_base_centimos, desglose.moneda),
+        tipo_vehiculo=desglose.tipo_vehiculo,
+        factor_milesimas=desglose.factor_milesimas,
+        base_ajustada=Dinero.de_centimos(desglose.base_ajustada_centimos, desglose.moneda),
+        adicionales=[
+            AdicionalAplicadoOut(
+                servicio_adicional_id=item.servicio_adicional_id,
+                nombre=item.nombre,
+                monto=Dinero.de_centimos(item.monto_centimos, desglose.moneda),
+            )
+            for item in desglose.adicionales
+        ],
+        adicionales_total=Dinero.de_centimos(desglose.adicionales_centimos, desglose.moneda),
+        descuento=Dinero.de_centimos(desglose.descuento_centimos, desglose.moneda),
+        total=Dinero.de_centimos(desglose.total_centimos, desglose.moneda),
+        promocion_id=desglose.promocion_id,
+        promocion=desglose.promocion_nombre,
+        cupon_aplicado=desglose.cupon_aplicado,
+        cupon_rechazado=desglose.cupon_rechazado,
+        motivo_rechazo_cupon=desglose.motivo_rechazo_cupon,
+        incidencia=desglose.incidencia,
+    )
+
+
+def armar_desglose_guardado(fila: ReservaTarifaDesglose, reserva: Reserva) -> DesgloseOut:
+    """The FROZEN breakdown of a reservation, read back from its own row."""
+    return DesgloseOut(
+        precio_base=Dinero.de_centimos(fila.precio_base_centimos, fila.moneda),
+        tipo_vehiculo=fila.tipo_vehiculo,
+        factor_milesimas=fila.factor_milesimas,
+        base_ajustada=Dinero.de_centimos(fila.base_ajustada_centimos, fila.moneda),
+        adicionales=[
+            AdicionalAplicadoOut(
+                servicio_adicional_id=item.servicio_adicional_id,
+                nombre=item.nombre,
+                monto=Dinero.de_centimos(item.monto_centimos, item.moneda),
+            )
+            for item in reserva.adicionales
+        ],
+        adicionales_total=Dinero.de_centimos(fila.adicionales_centimos, fila.moneda),
+        descuento=Dinero.de_centimos(fila.descuento_centimos, fila.moneda),
+        total=Dinero.de_centimos(fila.total_centimos, fila.moneda),
+        promocion_id=fila.promocion_id,
+        promocion=fila.promocion_nombre,
+        cupon_aplicado=fila.cupon_aplicado,
+        cupon_rechazado=fila.cupon_rechazado,
+        motivo_rechazo_cupon=fila.motivo_rechazo_cupon,
+        incidencia=fila.incidencia,
     )
 
 
@@ -208,6 +389,9 @@ def armar_reserva(
         observacion_revision=reserva.observacion_revision,
         cancelacion=cancelacion,
         pago=armar_pago(pago) if pago is not None else None,
+        tarifa=(
+            armar_desglose_guardado(reserva.tarifa, reserva) if reserva.tarifa is not None else None
+        ),
         historial=[
             HistorialItem(
                 estado=fila.estado,

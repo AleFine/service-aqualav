@@ -34,11 +34,13 @@ def crear(
     descripcion: str,
     categoria: str,
     duracion_min: int,
+    imagen_url: str | None = None,
 ) -> Servicio:
     servicio = Servicio(
         nombre=nombre,
         descripcion=descripcion,
         categoria=categoria,
+        imagen_url=imagen_url,
         duracion_min=duracion_min,
         activo=True,
     )

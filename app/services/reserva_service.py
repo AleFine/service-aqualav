@@ -31,7 +31,13 @@ from app.schemas import (
     Dinero,
     ReservaCrear,
 )
-from app.services import agenda_service, eventos, operacion_service, servicio_service
+from app.services import (
+    agenda_service,
+    eventos,
+    operacion_service,
+    servicio_service,
+    tarifa_service,
+)
 from app.services.disponibilidad_service import ANTICIPACION_MINIMA, bloques_cercanos
 from app.services.notificador import NOTIFICADOR_PREDETERMINADO, Notificador
 from app.services.politica_cancelacion import POLITICA_PREDETERMINADA, PoliticaCancelacion
@@ -120,6 +126,21 @@ def crear(
     inicio_utc = a_utc(inicio_lima)
     fin_utc = a_utc(fin_lima)
 
+    # RF-012 / RN-04: the tariff is computed BEFORE the bay set is locked, so a
+    # request rejected for an unknown add-on never holds the lock. The day the
+    # SERVICE happens is what decides which promotions are in force, not the
+    # day it is booked.
+    desglose = tarifa_service.calcular(
+        db,
+        servicio_id=servicio.id,
+        precio_base_centimos=precio.monto_centimos,
+        moneda=precio.moneda,
+        tipo_vehiculo=vehiculo.tipo,
+        adicionales_ids=datos.adicionales,
+        cupon=datos.cupon,
+        fecha=inicio_lima.date(),
+    )
+
     # Serialization point: every concurrent creation queues on this lock, so
     # the overlap check below cannot be raced (RF-014 CA-02).
     bahias = bahia_repo.listar_activas_bloqueadas(db)
@@ -159,12 +180,15 @@ def crear(
         # by. A presential booking is born confirmed (transition 2); INC-4 adds
         # the online branch, which is born ``pendiente_pago`` (transition 1).
         estado=EstadoReserva.CONFIRMADA.value,
-        # RF-014 CA-03: the tariff is frozen here; a later price change
-        # (EXTENSION POINT P6) never moves it.
-        monto_centimos=precio.monto_centimos,
-        moneda=precio.moneda,
+        # RF-014 CA-03 + RF-012: the tariff is frozen here, and so is the
+        # BREAKDOWN that explains it. A later price, factor or promotion change
+        # (EXTENSION POINT P6) never moves either of them.
+        monto_centimos=desglose.total_centimos,
+        moneda=desglose.moneda,
         modalidad_pago=ModalidadPago.PRESENCIAL.value,
     )
+
+    tarifa_service.congelar(db, reserva, desglose)
 
     reserva_repo.agregar_historial(
         db,
@@ -186,6 +210,23 @@ def crear(
             "inicio": inicio_utc.isoformat(),
             "monto_centimos": reserva.monto_centimos,
         },
+    )
+    eventos.registrar_evento(
+        db,
+        eventos.ENTIDAD_RESERVA,
+        reserva.id,
+        eventos.TARIFA_CALCULADA,
+        autor_id=usuario.id,
+        datos=desglose.a_datos(),
+    )
+    # RF-012 flows 3a and 4a: a rejected coupon and a total clamped to zero are
+    # both REPORTED, never silent, and neither aborts the booking.
+    tarifa_service.registrar_incidencias(
+        db,
+        desglose,
+        entidad=eventos.ENTIDAD_RESERVA,
+        entidad_id=reserva.id,
+        autor_id=usuario.id,
     )
 
     db.commit()
@@ -269,6 +310,16 @@ def atencion_inmediata(
 
     inicio_utc = a_utc(inicio_lima)
     fin_utc = a_utc(fin_lima)
+    desglose = tarifa_service.calcular(
+        db,
+        servicio_id=servicio.id,
+        precio_base_centimos=precio.monto_centimos,
+        moneda=precio.moneda,
+        tipo_vehiculo=vehiculo.tipo,
+        adicionales_ids=datos.adicionales,
+        cupon=datos.cupon,
+        fecha=inicio_lima.date(),
+    )
     libre = _primera_bahia_libre(db, inicio_utc, fin_utc)
     if libre is None:
         raise ReservaBloqueOcupado(
@@ -291,11 +342,12 @@ def atencion_inmediata(
         inicio=inicio_utc,
         fin=fin_utc,
         estado=EstadoReserva.CONFIRMADA.value,
-        monto_centimos=precio.monto_centimos,
-        moneda=precio.moneda,
+        monto_centimos=desglose.total_centimos,
+        moneda=desglose.moneda,
         modalidad_pago=ModalidadPago.PRESENCIAL.value,
         atencion_sin_reserva=True,
     )
+    tarifa_service.congelar(db, reserva, desglose)
     reserva_repo.agregar_historial(
         db,
         reserva_id=reserva.id,
@@ -316,6 +368,21 @@ def atencion_inmediata(
             "inicio": inicio_utc.isoformat(),
             "monto_centimos": reserva.monto_centimos,
         },
+    )
+    eventos.registrar_evento(
+        db,
+        eventos.ENTIDAD_RESERVA,
+        reserva.id,
+        eventos.TARIFA_CALCULADA,
+        autor_id=autor.id,
+        datos=desglose.a_datos(),
+    )
+    tarifa_service.registrar_incidencias(
+        db,
+        desglose,
+        entidad=eventos.ENTIDAD_RESERVA,
+        entidad_id=reserva.id,
+        autor_id=autor.id,
     )
 
     # The check-in commits the whole thing, so a rejected entry leaves no

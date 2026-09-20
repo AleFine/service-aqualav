@@ -164,6 +164,7 @@ criterios de aceptación (`CA-nn`) de los requisitos implementados:
 | `test_auth.py` | RF-001 CA-01/02/03 · RF-002 CA-01/02 · refresco de token |
 | `test_vehiculos.py` | RF-007 CA-01/02/03 |
 | `test_servicios.py` | RF-009 CA-01/02 · RF-010 CA-01/02/03 |
+| `test_tarifas.py` | RF-012 CA-01/02 y flujos `3a`/`4a` · RF-011 CA-01/02 y flujos `2a`/`4a` · RF-009 CA-02 v1.0 · RF-010 v1.0 (factores auditados) · RN-04 · RN-12 |
 | `test_disponibilidad.py` | RF-013 CA-01/02/03 · sugerencia de siguiente fecha |
 | `test_reservas.py` | RF-014 CA-01/02/03 · RF-016 CA-01/02/03 · RF-017 CA-01/02/03 |
 | `test_operacion.py` | RF-019 CA-01/02/03 · RF-021 CA-01/02/03 · RF-022 CA-02 · RF-024 CA-01/02 |
@@ -193,10 +194,15 @@ arranca sin tocar `.env`; las claves de configuración son
 `SEED_RECEPCION_CORREO`, `SEED_RECEPCION_PASSWORD`, `SEED_OPERARIO_CORREO` y
 `SEED_OPERARIO_PASSWORD`.
 
-El seed también carga los 20 permisos, los 4 roles, las 14 transiciones de
+El seed también carga los 21 permisos, los 4 roles, las 14 transiciones de
 estado del Anexo A v1.0, las 4 bahías, 5 servicios con su precio vigente y un
-vehículo de demostración (`ABC-123`) para el cliente. Es idempotente: se puede
-ejecutar tantas veces como haga falta.
+vehículo de demostración (`ABC-123`) para el cliente. Desde `INC-2` añade la
+tarifa completa de `RN-04`: los **factores por tipo de vehículo** (sedán 1,0 ·
+SUV 1,3 · camioneta 1,4 · motocicleta 0,8, más un factor propio del «Lavado
+Express» para motocicletas), tres **adicionales**, un **paquete** («Pack Brillo
+Total», S/ 60,00 frente a S/ 70,00 por separado) y tres **promociones**: una
+vigente, una ya vencida —para ver que caduca sola— y el cupón `BIENVENIDA10`.
+Es idempotente: se puede ejecutar tantas veces como haga falta.
 
 ---
 
@@ -212,11 +218,27 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 | `GET` | `/auth/yo` | autenticado | RF-002 | 200 · 401 |
 | `GET` | `/vehiculos` | `vehiculo:leer` | RF-007 | 200 · 401 · 403 |
 | `POST` | `/vehiculos` | `vehiculo:crear` | RF-007 | 201 · 409 · 422 |
-| `GET` | `/servicios` | `servicio:leer` | RF-009 | 200 · 401 · 403 |
-| `GET` | `/servicios/{id}` | `servicio:leer` | RF-009 | 200 · 404 |
+| `GET` | `/servicios?vehiculo_id=&tipo_vehiculo=` | `servicio:leer` | RF-009 | 200 · 401 · 403 · 404 |
+| `GET` | `/servicios/{id}?vehiculo_id=&tipo_vehiculo=` | `servicio:leer` | RF-009 `CA-02` | 200 · 404 |
+| `GET` | `/paquetes` | `servicio:leer` | RF-011 | 200 · 403 |
+| `GET` | `/promociones` | `servicio:leer` | RF-011 | 200 · 403 |
+| `GET` | `/adicionales` | `servicio:leer` | RN-04 | 200 · 403 |
+| `POST` | `/tarifas/calculo` | `servicio:leer` | RF-012 | 200 · 404 · **422** |
 | `GET` | `/admin/servicios` | `servicio:administrar` | RF-010 | 200 · 403 |
+| `GET` | `/admin/servicios/{id}` | `servicio:administrar` | RF-010 | 200 · 403 · 404 |
 | `POST` | `/admin/servicios` | `servicio:administrar` | RF-010 | 201 · 403 · 422 |
 | `PATCH` | `/admin/servicios/{id}` | `servicio:administrar` | RF-010 | 200 · 403 · 404 · 422 |
+| `GET` | `/admin/factores` | `servicio:administrar` | RF-010 v1.0 | 200 · 403 |
+| `PUT` | `/admin/factores` | `servicio:administrar` | RF-010 v1.0, RN-04 | 200 · 403 · 404 · 422 |
+| `GET` | `/admin/paquetes` | `promocion:administrar` | RF-011 | 200 · 403 |
+| `POST` | `/admin/paquetes` | `promocion:administrar` | RF-011 | 201 · 403 · 404 · 422 |
+| `PATCH` | `/admin/paquetes/{id}` | `promocion:administrar` | RF-011 | 200 · 404 · 422 |
+| `GET` | `/admin/promociones` | `promocion:administrar` | RF-011 | 200 · 403 |
+| `POST` | `/admin/promociones` | `promocion:administrar` | RF-011 `2a` | 201 · **409** · 404 · 422 |
+| `PATCH` | `/admin/promociones/{id}` | `promocion:administrar` | RF-011 `2a` | 200 · **409** · 404 · 422 |
+| `GET` | `/admin/adicionales` | `promocion:administrar` | RN-04 | 200 · 403 |
+| `POST` | `/admin/adicionales` | `promocion:administrar` | RN-04 | 201 · 403 · 422 |
+| `PATCH` | `/admin/adicionales/{id}` | `promocion:administrar` | RN-04 | 200 · 404 · 422 |
 | `GET` | `/admin/roles` | `rol:administrar` | RF-004 | 200 · 401 · 403 |
 | `GET` | `/admin/permisos` | `rol:administrar` | RF-004 | 200 · 401 · 403 |
 | `PUT` | `/admin/usuarios/{id}/rol` | `rol:administrar` | RF-004 | 200 · 403 · 404 · **422** |
@@ -287,6 +309,24 @@ sí mismo `rol:administrar` (`422 CAMBIO_DE_ROL_PROPIO`).
   trabajo, hace falta `confirmar_operario_ocupado` (`3a`). La bahía se libera
   sola cuando la reserva llega a un estado **terminal**, que se deriva de
   `transicion_estado`, nunca de una lista de estados.
+- `RN-04` — `tarifa = (precio base × factor por tipo de vehículo) + adicionales
+  − descuentos`. El resultado viaja **desglosado** en `tarifa` (base, factor,
+  adicionales, descuento y total) y se **congela** en la reserva al crearla, en
+  la tabla `reserva_tarifa_desglose`: cambiar después el precio, el factor o la
+  promoción no mueve ni un céntimo de lo ya reservado. El factor se guarda en
+  **milésimas** (`1300` = 1,3) y todo importe es un entero de céntimos, así que
+  `3000 × 1,3` son exactamente `3900` (`RF-012 CA-01`) y no el `3899,99…` que
+  devolvería un `float`. Un cupón inválido o vencido **no tumba la operación**:
+  se informa el motivo en `cupon_rechazado` / `motivo_rechazo_cupon` y el total
+  se recalcula sin él (`3a`); si el descuento superara el total, la tarifa se
+  limita a cero y queda la incidencia (`4a`). Ambos casos escriben un evento de
+  dominio.
+- `RF-011` — una promoción sin cupón se aplica sola y **no puede solaparse en
+  fechas** con otra automática del mismo servicio (`409 PROMOCION_SOLAPADA`,
+  que nombra la promoción en conflicto para poder ajustar el rango). Los
+  cupones sí pueden convivir: los elige el cliente escribiéndolos. Una
+  promoción vencida deja de aplicarse **sola**, porque la vigencia se compara
+  con la fecha del servicio en cada cálculo; nadie la desactiva.
 - `RN-09` — no se entrega un vehículo sin servicio finalizado y pago confirmado.
 - `RN-12` — soles con IGV incluido; el precio almacenado es el final.
 
@@ -372,11 +412,14 @@ recuperar.
 - **`servicio_precio`** guarda la historia de tarifas. Cambiar un precio
   **cierra** la fila vigente (`vigente_hasta = ahora`) e **inserta** una nueva;
   el monto nunca se actualiza. La reserva congela su importe al crearse.
-  *Cómo crece a v1.0*: es lo que permite que una reserva antigua conserve su
-  tarifa (`RF-010 CA-02`), que los reportes de ingresos sean correctos y que
-  v0.3 agregue `precio_regular`, `precio_promocional` y el factor por tipo de
-  vehículo (`RF-012`) como filas y campos nuevos, sin romper al cliente: la API
-  ya devuelve `precio` como objeto y no como número suelto.
+  *Cómo creció a v1.0*: exactamente como estaba previsto. `INC-2` añadió
+  `factor_tipo_vehiculo`, versionado con el mismo patrón (un cambio **cierra**
+  la fila vigente e inserta otra, y se audita con el valor anterior y el
+  nuevo), y `precio_aplicable` / `precio_promocional` entraron como campos
+  nuevos del objeto `precio` sin romper a ningún cliente. Una reserva antigua
+  conserva su tarifa (`RF-010 CA-02`) y ahora también **el desglose que la
+  explica** (`reserva_tarifa_desglose`), que es lo que `RF-012` exige que sea
+  trazable y auditable.
 
 ---
 
@@ -392,11 +435,15 @@ app/
   models/                  una tabla por módulo
   schemas/                 contratos Pydantic v2
   repositories/            acceso a datos por agregado
-  services/                auth · rol · vehiculo · servicio · disponibilidad
-                           reserva · operacion · pago · eventos · notificador
-                           politica_cancelacion · ensamblador
-  api/v1/                  auth · vehiculos · servicios · admin_servicios
-                           admin_roles · disponibilidad · reservas · operacion
+  services/                auth · rol · usuario · vehiculo · servicio · bahia
+                           disponibilidad · agenda · asignacion · reserva
+                           operacion · pago · tarifa · promocion · eventos
+                           notificador · politica_cancelacion · ensamblador
+                           proveedores/ (correo simulado)
+  api/v1/                  auth · vehiculos · servicios · catalogo
+                           admin_servicios · admin_tarifas · admin_roles
+                           admin_usuarios · admin_bahias · agenda
+                           disponibilidad · reservas · operacion · asignacion
                            pagos · estados · health
   seed.py                  carga inicial idempotente
 migrations/                Alembic

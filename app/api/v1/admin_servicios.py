@@ -33,6 +33,27 @@ def listar(
     return Lista[ServicioOut](items=[armar_servicio(s) for s in servicios])
 
 
+@router.get(
+    "/{servicio_id}",
+    response_model=ServicioOut,
+    responses=RESPUESTAS,
+    summary="Detalle de un servicio, activo o inactivo",
+)
+def detalle(
+    servicio_id: int,
+    _: Usuario = Depends(requiere_permiso("servicio:administrar")),
+    db: Session = Depends(get_db),
+) -> ServicioOut:
+    """The administrator's direct door to an inactive service.
+
+    ``GET /servicios/{id}`` answers 404 for one that is disabled (RF-010
+    CA-03), which forced the admin client to list the whole catalogue and
+    filter it client side just to reopen the service it had disabled a moment
+    earlier. This is the same detail, without the detour.
+    """
+    return armar_servicio(servicio_service.obtener(db, servicio_id))
+
+
 @router.post(
     "",
     response_model=ServicioOut,
