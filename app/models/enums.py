@@ -287,6 +287,12 @@ class EventoNotificacion(str, Enum):
     #: RF-028 output: "cliente notificado". A reversal - processed or left
     #: for a human - is something the customer is entitled to hear about.
     REEMBOLSO = "reembolso"
+    #: RF-024 step 5 / RF-031: "el sistema envía el comprobante y la INVITACION
+    #: A CALIFICAR". Telling the customer the window is open is a template and
+    #: an event, exactly like every other notice - INC-5 asked for rows, not a
+    #: hand written dispatch - so turning it off, retranslating it or moving it
+    #: to another channel stays an UPDATE.
+    CALIFICACION = "calificacion"
 
 
 class PlataformaDispositivo(str, Enum):
@@ -333,8 +339,57 @@ class MotivoBloqueo(str, Enum):
     AUSENCIA = "ausencia"
 
 
+class MomentoEvidencia(str, Enum):
+    """Which half of the service a photograph documents (RF-023).
+
+    "Hasta seis fotografias ANTES Y DESPUES": the two moments are what the
+    evidence is FOR - the pre-existing damage the shop wants on record before
+    it touches the vehicle, and the finished work the customer looks at
+    afterwards - so the cap is counted per moment. A single shared budget would
+    let six "antes" photographs exhaust it and leave the "despues" side, which
+    is the one CA-01 shows the customer, with nothing in it.
+    """
+
+    ANTES = "antes"
+    DESPUES = "despues"
+
+
+class EstadoCargaEvidencia(str, Enum):
+    """How the upload of one piece of evidence ended (RF-023 flow 4a).
+
+    ``pendiente`` is the whole point of that flow: the device recorded the
+    photograph, the bytes never made it, and the row exists so the retry has
+    something to complete. ``fallida`` is the same thing after the store said
+    no, with the cause on the record. Neither is an error the caller has to
+    resolve by hand - CA-02 says the upload finishes "sin intervencion" when
+    the connection comes back.
+    """
+
+    PENDIENTE = "pendiente"
+    SUBIDA = "subida"
+    FALLIDA = "fallida"
+
+
+class CarpetaArchivo(str, Enum):
+    """Top level of an object key in the simulated store (RF-006, RF-009, RF-023).
+
+    A key is not a path, but it is not a free-for-all either: the first segment
+    says what the object IS, so the store can be swept, quoted or moved by
+    kind. Callers never compose the rest of the key - ``archivo_service`` does,
+    with an opaque random name.
+    """
+
+    PERFILES = "perfiles"
+    SERVICIOS = "servicios"
+    EVIDENCIAS = "evidencias"
+
+
 #: Default currency for every amount in the MVP (RN-12: PEN, IGV included).
 MONEDA_PREDETERMINADA = "PEN"
+
+#: RF-031: the score is one to five stars, and nothing else is a score.
+PUNTUACION_MINIMA = 1
+PUNTUACION_MAXIMA = 5
 
 #: Neutral vehicle factor, in thousandths: 1000 = 1.0 (RN-04).
 #: Factors are integers on purpose - ``3000 x 1.3`` stops being ``3900`` the

@@ -22,6 +22,7 @@ from app.models.enums import MONEDA_PREDETERMINADA, ModalidadPago
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.models.asignacion import AsignacionServicio, ColaEspera
     from app.models.bahia import Bahia
+    from app.models.calidad import Calificacion, Evidencia
     from app.models.notificacion import Recordatorio
     from app.models.pago import Comprobante, Pago
     from app.models.servicio import Servicio
@@ -177,6 +178,25 @@ class Reserva(Base):
     #: RF-030: the two-hour reminder and the answer it got.
     recordatorio: Mapped[Optional["Recordatorio"]] = relationship(
         "Recordatorio",
+        back_populates="reserva",
+        cascade="all, delete-orphan",
+        uselist=False,
+        lazy="selectin",
+    )
+    #: RF-023: the photographs of this service, oldest first. LAZY on purpose,
+    #: unlike its neighbours: ``ReservaOut`` does not carry the album - it has
+    #: its own endpoint - so eager loading it would buy a query on every page
+    #: of every listing for something nobody asked for. The relationship exists
+    #: for the cascade and for whoever does want to walk it.
+    evidencias: Mapped[list["Evidencia"]] = relationship(
+        "Evidencia",
+        back_populates="reserva",
+        cascade="all, delete-orphan",
+        order_by="Evidencia.id",
+    )
+    #: RF-031 / RN-10: at most one, which is why it is not a list.
+    calificacion: Mapped[Optional["Calificacion"]] = relationship(
+        "Calificacion",
         back_populates="reserva",
         cascade="all, delete-orphan",
         uselist=False,

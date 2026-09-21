@@ -35,7 +35,13 @@ from app.repositories import pago as pago_repo
 from app.repositories import reserva as reserva_repo
 from app.repositories import transicion as transicion_repo
 from app.schemas import CheckInIn, CheckOutIn, RevisionIn
-from app.services import bahia_service, eventos, notificacion_service, seguimiento_service
+from app.services import (
+    bahia_service,
+    calificacion_service,
+    eventos,
+    notificacion_service,
+    seguimiento_service,
+)
 from app.services.notificador import NOTIFICADOR_PREDETERMINADO, Notificador
 
 #: RF-019 flow 3a: past this delay the check-in needs an explicit confirmation.
@@ -450,20 +456,13 @@ def check_out(
     reserva.hora_entrega = ahora_utc()
     reserva.conformidad_cliente = bool(datos.conformidad_cliente)
 
-    # RF-024 step 4: the delivery opens the rating window. HOOK, on purpose -
-    # ``calificacion`` is INC-6 (RF-031) and back-filling the moment the window
-    # opened would be impossible, so the event is written now and RN-10 will
-    # count its seven calendar days from here.
-    # TODO(INC-6, RF-031): read this event to expose "puedes calificar" and to
-    # close the window seven days later. The call site must not change.
-    eventos.registrar_evento(
-        db,
-        eventos.ENTIDAD_RESERVA,
-        reserva.id,
-        eventos.RESERVA_CALIFICACION_HABILITADA,
-        autor_id=autor.id if autor else None,
-        datos={"habilitada_en": reserva.hora_entrega.isoformat()},
-    )
+    # RF-024 step 4 + step 5: the delivery opens the rating window and invites
+    # the customer to use it. Still exactly one call from exactly here, which
+    # is what the INC-1B hook asked for; what changed is that the knowledge
+    # moved into the service that owns it. It has to run BEFORE the move,
+    # because ``cambiar_estado`` releases the assignment when the reservation
+    # becomes terminal and the operator snapshot would be gone by then.
+    calificacion_service.habilitar(db, reserva, autor, momento=reserva.hora_entrega, **proveedores)
 
     return cambiar_estado(
         db,

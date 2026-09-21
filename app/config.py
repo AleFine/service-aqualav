@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # the checkout clean; set it to any path to keep the files around.
     almacenamiento_proveedor: str = "simulado"
     almacenamiento_directorio: str = ""
+    # RF-023 flow 3a + RNF-004 M4: "la app comprime las imagenes antes de
+    # subirlas (max. 1 MB)". The compression is the mobile client's job; the
+    # backend's job is to REFUSE what arrives over the limit and say why, so
+    # the app knows whether to compress again or ask for another picture.
+    # Kilobytes, so a demo can lower it without editing code.
+    archivo_tamano_maximo_kb: int = 1024
 
     # RF-027: the PDF generator. The simulation writes a real, minimal PDF 1.4
     # by hand - no reportlab, no dependency at all.

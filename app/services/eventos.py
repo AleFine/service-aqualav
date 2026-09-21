@@ -1,8 +1,11 @@
 """Domain event log helper (EXTENSION POINT P7).
 
 Every mutation listed in the contract writes one row in ``evento_dominio``.
-Nothing reads it in the MVP; it is the raw material of the v0.2 notification
-feed (RF-029) and of the v1.0 reports, and back-filling it later is impossible.
+The MVP only ever wrote it; INC-6 is the first increment that READS it back, and
+for a reason worth knowing: ``reserva.calificacion_habilitada`` is the only
+record of when the rating window of RN-10 opened, and of who was working the
+service at that moment. Back-filling either is impossible, which is precisely
+the argument for having written the log from day one.
 """
 
 from typing import Any
@@ -27,6 +30,10 @@ ENTIDAD_AGENDA = "agenda"
 ENTIDAD_PAQUETE = "paquete"
 ENTIDAD_PROMOCION = "promocion"
 ENTIDAD_ADICIONAL = "servicio_adicional"
+#: RF-023 and RF-031 have no entity of their own: a photograph and a rating
+#: are things that happened TO A SERVICE, so they are logged under
+#: ``reserva`` and land in the same timeline as its check-in and its
+#: delivery, which is the timeline RF-036 is going to read.
 
 # Actions (contract section 1, ``evento_dominio``).
 USUARIO_REGISTRADO = "usuario.registrado"
@@ -96,9 +103,19 @@ RESERVA_ASIGNADA = "reserva.asignada"
 RESERVA_ENCOLADA = "reserva.encolada"
 #: RF-024 flow 3a: the customer objected to the result.
 RESERVA_EN_REVISION = "reserva.en_revision"
-#: RF-024 step 4: the delivery opens the rating window. INC-6 (RF-031) reads
-#: this event to decide when the seven calendar days of RN-10 start counting.
+#: RF-024 step 4: the delivery opens the rating window. It is the ONLY record
+#: of when the seven calendar days of RN-10 start counting, and it carries the
+#: operator snapshot because ``asignacion_servicio`` is deleted by the very
+#: move that writes this row. ``calificacion_service`` reads it back.
 RESERVA_CALIFICACION_HABILITADA = "reserva.calificacion_habilitada"
+#: RF-031: the customer's verdict. The COMMENT is not part of ``datos`` - the
+#: event log is an audit trail, not a second copy of the review.
+RESERVA_CALIFICADA = "reserva.calificada"
+#: RF-023: one photograph of the service was recorded, and whether its bytes
+#: made it. ``evidencia.no_subida`` is flow 4a: the row is waiting for the
+#: device to retry, and this is what tells the shop it is not there yet.
+EVIDENCIA_REGISTRADA = "evidencia.registrada"
+EVIDENCIA_NO_SUBIDA = "evidencia.no_subida"
 #: RF-030: the two-hour reminder and the three answers it admits. Flow 3a -
 #: nobody answered - writes nothing on purpose: the reservation simply stays
 #: confirmed, and the absence of these events IS the record of that.

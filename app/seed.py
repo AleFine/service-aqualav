@@ -80,6 +80,11 @@ PERMISOS: dict[str, str] = {
     "bahia:administrar": "Crear, editar y desactivar bahías.",
     "planificador:ejecutar": "Forzar el barrido de recordatorios y de la cola de espera.",
     "promocion:administrar": "Crear, editar y desactivar paquetes y promociones.",
+    "archivo:subir": (
+        "Subir un archivo al almacenamiento (foto de perfil, imagen de servicio, evidencia)."
+    ),
+    "evidencia:registrar": "Registrar fotografías de evidencia de un servicio (RF-023).",
+    "calificacion:crear": "Calificar un servicio entregado propio (RF-031).",
 }
 
 #: role name -> Spanish description (RF-004 v1.0: four roles).
@@ -113,6 +118,11 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
         # the permission the transition ``pendiente_pago -> confirmada``
         # demands has to be theirs. ``pago:registrar`` stays with the counter.
         "pago:en_linea",
+        # RF-006: the profile picture is the customer's own file.
+        "archivo:subir",
+        # RF-031: rating the service is what the CUSTOMER does, and only on
+        # their own booking - ``calificacion_service`` checks that too.
+        "calificacion:crear",
     ),
     # The counter: receives the vehicle, assigns it, charges it and hands it
     # back. It does NOT advance the service inside the bay.
@@ -135,6 +145,11 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
         # The counter also takes a card at the till through the gateway, and
         # settles the modality with the customer in front of them.
         "pago:en_linea",
+        # RF-023 names BOTH the operator and the receptionist as the actors of
+        # the evidence: the pre-existing damage is photographed at reception,
+        # before the vehicle ever reaches a bay.
+        "archivo:subir",
+        "evidencia:registrar",
     ),
     # The bay: advances the service through its operative states (RF-021).
     # ``reserva:leer_todas`` is shared with the counter because an operator
@@ -144,6 +159,9 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
         "servicio:leer",
         "reserva:leer_todas",
         "reserva:avanzar_estado",
+        # RF-023: the "despues" half of the evidence is taken in the bay.
+        "archivo:subir",
+        "evidencia:registrar",
     ),
     # The administrator is a superset of every permission.
     "administrador": tuple(PERMISOS),
@@ -375,6 +393,13 @@ CANALES_POR_EVENTO: dict[str, tuple[str, ...]] = {
         CanalNotificacion.CORREO.value,
         CanalNotificacion.PUSH.value,
     ),
+    # RF-024 step 5 / RF-031: the invitation to rate goes out with the
+    # delivery. No push: the vehicle was just handed over in person and the
+    # customer is standing there - a buzz asking for stars would be noise.
+    EventoNotificacion.CALIFICACION.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+    ),
     # Internal notices: they belong in the app, not in somebody's inbox.
     EventoNotificacion.ASIGNACION.value: (CanalNotificacion.EN_APP.value,),
     EventoNotificacion.ESTADO_CAMBIADO.value: (CanalNotificacion.EN_APP.value,),
@@ -474,6 +499,18 @@ TEXTOS: dict[tuple[str, str], tuple[str, str]] = {
         "Refund for booking {codigo}",
         "We registered a {monto} refund for booking {codigo} "
         "({motivo_reembolso}). Status: {estado_reembolso}.",
+    ),
+    (EventoNotificacion.CALIFICACION.value, Idioma.ES.value): (
+        "¿Cómo estuvo tu servicio {codigo}?",
+        "Hola {cliente}: ya te entregamos el vehículo {placa}. Cuéntanos qué "
+        "te pareció «{servicio}»: puedes calificarlo desde la aplicación hasta "
+        "el {vence_calificacion} ({dias} días).",
+    ),
+    (EventoNotificacion.CALIFICACION.value, Idioma.EN.value): (
+        "How was your service {codigo}?",
+        "Hi {cliente}: vehicle {placa} is back with you. Tell us how "
+        "«{servicio}» went - you can rate it from the app until "
+        "{vence_calificacion} ({dias} days).",
     ),
     (EventoNotificacion.ASIGNACION.value, Idioma.ES.value): (
         "Tienes un servicio asignado en la {bahia}",

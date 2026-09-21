@@ -324,6 +324,35 @@ def llevar_hasta_finalizado(api_recepcion, api_operario, db, reserva_id: int) ->
         assert respuesta.status_code == 200, respuesta.text
 
 
+def entregar(api_recepcion, reserva_id: int, *, conformidad: bool = True):
+    """``POST /reservas/{id}/check-out``: the delivery of RF-024.
+
+    It is the move that opens the rating window of RN-10, so every RF-031
+    scenario goes through it rather than writing the state by hand.
+    """
+    return api_recepcion.post(
+        f"{RUTA}/reservas/{reserva_id}/check-out", json={"conformidad_cliente": conformidad}
+    )
+
+
+def pagar_en_caja(api_recepcion, reserva_id: int, monto_centimos: int, *, clave: str = "caja-1"):
+    """``POST /reservas/{id}/pagos``: the counter charge RN-09 asks for."""
+    return api_recepcion.post(
+        f"{RUTA}/reservas/{reserva_id}/pagos",
+        json={"medio": "efectivo", "monto_centimos": monto_centimos},
+        headers={"Idempotency-Key": clave},
+    )
+
+
+#: A real, valid, one pixel PNG. Sixty-nine bytes, written by hand in the
+#: generator that produced this constant: the evidence tests need genuine image
+#: bytes and this project adds no dependency to get them (plan section 4).
+PIXEL_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mP4z8AAAAMBAQD3A0FDAAAAAElFTkSuQmCC"
+)
+MIME_PNG = "image/png"
+
+
 def dejar_una_sola_bahia(db) -> None:
     """Deactivate every bay but the first one.
 

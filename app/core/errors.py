@@ -454,6 +454,73 @@ class ComprobanteNoDisponible(AppError):
 
 
 # --------------------------------------------------------------------------
+# Evidence and quality (RF-023, RF-031, RN-10)
+# --------------------------------------------------------------------------
+class ArchivoRechazado(AppError):
+    """RF-023 flow 3a: the file is over the limit, or it is not a picture.
+
+    One code for one flow: "archivo sobre el limite -> se comprime o se pide
+    otra imagen". The ``detalles`` say which of the two happened and what the
+    limit is, so the app can decide between compressing again and asking the
+    operator for a different photograph.
+    """
+
+    codigo = "ARCHIVO_RECHAZADO"
+    http_status = 422
+    mensaje = (
+        "No pudimos aceptar el archivo. " "Comprime la imagen o elige otra y vuelve a intentarlo."
+    )
+
+
+class LimiteDeEvidencias(AppError):
+    """RF-023: "hasta SEIS fotografias" of each moment of the service."""
+
+    codigo = "LIMITE_DE_EVIDENCIAS"
+    http_status = 422
+    mensaje = (
+        "Ya registraste el máximo de fotografías para ese momento del servicio. "
+        "Elimina o reemplaza alguna antes de subir otra."
+    )
+
+
+class ServicioNoEnCurso(AppError):
+    """RF-023 precondition: "el servicio se encuentra en curso".
+
+    Not a state comparison: a service is in course while ``transicion_estado``
+    still declares a move out of where it is (principle P3).
+    """
+
+    codigo = "SERVICIO_NO_EN_CURSO"
+    http_status = 422
+    mensaje = (
+        "Ese servicio ya terminó, así que no admite nuevas evidencias. "
+        "Regístralas mientras el vehículo está en el taller."
+    )
+
+
+class CalificacionNoHabilitada(AppError):
+    """RN-10: only a DELIVERED service can be rated."""
+
+    codigo = "CALIFICACION_NO_HABILITADA"
+    http_status = 422
+    mensaje = (
+        "Todavía no puedes calificar este servicio. "
+        "La calificación se habilita cuando te entregamos el vehículo."
+    )
+
+
+class PlazoDeCalificacionVencido(AppError):
+    """RN-10 / RF-031 flow 3a: the seven calendar days went by."""
+
+    codigo = "PLAZO_DE_CALIFICACION_VENCIDO"
+    http_status = 422
+    mensaje = (
+        "El plazo para calificar este servicio venció. "
+        "Escríbenos desde la aplicación si quieres dejarnos un comentario."
+    )
+
+
+# --------------------------------------------------------------------------
 # Generic
 # --------------------------------------------------------------------------
 class RecursoNoEncontrado(AppError):
@@ -519,6 +586,11 @@ ERRORES_POR_CODIGO: dict[str, type[AppError]] = {
         ModalidadDePagoNoModificable,
         MontoMayorAlPagado,
         ComprobanteNoDisponible,
+        ArchivoRechazado,
+        LimiteDeEvidencias,
+        ServicioNoEnCurso,
+        CalificacionNoHabilitada,
+        PlazoDeCalificacionVencido,
         RecursoNoEncontrado,
         ErrorDeValidacion,
         DatosInvalidos,

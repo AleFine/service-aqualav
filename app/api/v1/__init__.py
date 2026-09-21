@@ -9,8 +9,10 @@ from app.api.v1 import (
     admin_tarifas,
     admin_usuarios,
     agenda,
+    archivos,
     asignacion,
     auth,
+    calidad,
     catalogo,
     disponibilidad,
     estados,
@@ -43,6 +45,8 @@ api_router.include_router(agenda.router)
 api_router.include_router(disponibilidad.router)
 api_router.include_router(estados.router)
 api_router.include_router(notificaciones.router)
+# RF-006 / RF-009 / RF-023: the generic object door of the simulated store.
+api_router.include_router(archivos.router)
 api_router.include_router(interno.router)
 # ``operacion`` and ``asignacion`` first: they own the literal
 # ``/reservas/buscar``, ``/reservas/atencion-inmediata`` and ``/reservas/cola``,
@@ -50,6 +54,9 @@ api_router.include_router(interno.router)
 api_router.include_router(operacion.router)
 api_router.include_router(asignacion.router)
 api_router.include_router(pagos.router)
+# RF-023 / RF-031: both own literal sub-resources of ``/reservas/{id}``,
+# so they go in with the rest of the reservation routers.
+api_router.include_router(calidad.router)
 # RF-027 CA-02: the receipt PDF hangs off the receipt, not off the reservation.
 api_router.include_router(pagos.comprobantes)
 api_router.include_router(reembolsos.router)

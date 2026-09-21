@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import EstadoPago, ModalidadPago
 from app.schemas.bahia import BahiaResumen
+from app.schemas.calidad import CalificacionOut
 from app.schemas.common import Dinero, nombre_de_autor
 from app.schemas.pago import ComprobanteOut, PagoOut
 from app.schemas.servicio import ServicioResumen
@@ -183,6 +184,12 @@ class ReservaOut(BaseModel):
     tarifa: DesgloseOut | None = None
     #: RF-027 CA-02: the receipt of the service, once there is one.
     comprobante: ComprobanteOut | None = None
+    #: RF-031 flow 3b: the rating, once the customer left one. Present on every
+    #: read so the app can render it read-only without a second request; the
+    #: full window state (whether it is still open, until when) is
+    #: ``GET /reservas/{id}/calificacion``, which is one query per reservation
+    #: and therefore does not belong in a listing.
+    calificacion: CalificacionOut | None = None
     #: RN-05: what the shop kept when the cancellation came in late. Present on
     #: the cancellation response and on every read of a cancelled reservation,
     #: which is what makes the "resumen de la cancelación" of RF-016 step 3

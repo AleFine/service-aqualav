@@ -15,6 +15,7 @@ from app.schemas.agenda import (
     HorarioAtencionIn,
     HorarioAtencionOut,
 )
+from app.schemas.archivo import ArchivoOut, ArchivoSubirIn
 from app.schemas.asignacion import (
     AsignacionIn,
     AsignacionOut,
@@ -35,6 +36,13 @@ from app.schemas.auth import (
     VerificacionIn,
 )
 from app.schemas.bahia import BahiaActualizar, BahiaCrear, BahiaOut, BahiaResumen
+from app.schemas.calidad import (
+    CalificacionEstadoOut,
+    CalificacionIn,
+    CalificacionOut,
+    EvidenciaIn,
+    EvidenciaOut,
+)
 from app.schemas.common import (
     TAMANIO_PAGINA_DEFECTO,
     TAMANIO_PAGINA_MAXIMO,
@@ -129,6 +137,8 @@ __all__ = [
     "AgendaDiaOut",
     "AgendaOut",
     "AgendaReservaOut",
+    "ArchivoOut",
+    "ArchivoSubirIn",
     "AsignacionIn",
     "AsignacionOut",
     "AsignacionRolIn",
@@ -140,6 +150,9 @@ __all__ = [
     "BloqueDisponible",
     "BloqueoIn",
     "BloqueoOut",
+    "CalificacionEstadoOut",
+    "CalificacionIn",
+    "CalificacionOut",
     "CambioEstadoIn",
     "CancelacionIn",
     "CancelacionOut",
@@ -159,6 +172,8 @@ __all__ = [
     "DispositivoOut",
     "ErrorBody",
     "EstadoCatalogoOut",
+    "EvidenciaIn",
+    "EvidenciaOut",
     "FactorIn",
     "FactorOut",
     "HistorialItem",

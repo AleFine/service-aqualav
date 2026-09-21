@@ -7,6 +7,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.models.calidad import Calificable
 from app.models.enums import EstadoCuenta, Idioma
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -16,7 +17,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.models.vehiculo import Vehiculo
 
 
-class Usuario(Base):
+class Usuario(Calificable, Base):
     __tablename__ = "usuario"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -66,6 +67,15 @@ class Usuario(Base):
         nullable=False,
         default=EstadoCuenta.ACTIVA.value,
         server_default=EstadoCuenta.ACTIVA.value,
+    )
+    #: RF-031: "promedio del OPERARIO actualizado", the other input RF-033
+    #: reports on. It stays zero for everybody who never worked a service,
+    #: which is exactly what ``calificacion_promedio`` reads back as ``None``.
+    calificaciones_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    calificaciones_suma: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
     intentos_fallidos: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"

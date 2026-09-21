@@ -12,11 +12,13 @@ from app.models import (
     ESTADOS_PAGO_COBRADO,
     AsignacionServicio,
     Bahia,
+    Calificacion,
     ColaEspera,
     Comprobante,
     DiaNoLaborable,
     Dispositivo,
     EstadoPago,
+    Evidencia,
     FactorTipoVehiculo,
     Notificacion,
     Pago,
@@ -38,6 +40,8 @@ from app.schemas import (
     AsignacionOut,
     BahiaOut,
     BahiaResumen,
+    CalificacionEstadoOut,
+    CalificacionOut,
     CancelacionOut,
     ClienteResumen,
     ColaEsperaOut,
@@ -46,6 +50,7 @@ from app.schemas import (
     DiaNoLaborableOut,
     Dinero,
     DispositivoOut,
+    EvidenciaOut,
     FactorOut,
     HistorialItem,
     NotificacionOut,
@@ -67,6 +72,8 @@ from app.schemas import (
     VehiculoResumen,
 )
 from app.services import (
+    archivo_service,
+    calificacion_service,
     operacion_service,
     reserva_service,
     seguimiento_service,
@@ -215,6 +222,10 @@ def armar_servicio(servicio: Servicio, aplicable: PrecioAplicable | None = None)
             if aplicable is not None and aplicable.promocional_centimos is not None
             else None
         ),
+        # RF-031: the running average, so the catalogue can show the stars
+        # without a second request (and RF-033 can report on it).
+        calificacion_promedio=servicio.calificacion_promedio,
+        calificaciones_count=servicio.calificaciones_count,
     )
 
 
@@ -408,6 +419,64 @@ def armar_reembolso(reembolso: Reembolso) -> ReembolsoOut:
     )
 
 
+def armar_evidencia(evidencia: Evidencia) -> EvidenciaOut:
+    """RF-023 CA-01: the picture, with its timestamp, its author and its URL.
+
+    ``url`` is ``None`` while ``objeto_key`` is: the row of a photograph whose
+    bytes have not landed yet is not an error, it is flow 4a in progress, and
+    the app draws a "pendiente de subir" placeholder from exactly this.
+    """
+    return EvidenciaOut(
+        id=evidencia.id,
+        momento=evidencia.momento,
+        registrada_en=a_lima(desde_bd(evidencia.registrada_en)),
+        autor=_autor(evidencia.autor),
+        observacion=evidencia.observacion,
+        estado_carga=evidencia.estado_carga,
+        url=archivo_service.url(evidencia.objeto_key) if evidencia.objeto_key else None,
+        mime=evidencia.mime,
+        tamano_bytes=evidencia.tamano_bytes,
+        intentos=evidencia.intentos,
+        error=evidencia.error,
+        subida_en=(
+            a_lima(desde_bd(evidencia.subida_en)) if evidencia.subida_en is not None else None
+        ),
+        referencia_cliente=evidencia.referencia_cliente,
+    )
+
+
+def armar_evidencias(evidencias: list[Evidencia]) -> list[EvidenciaOut]:
+    return [armar_evidencia(evidencia) for evidencia in evidencias]
+
+
+def armar_calificacion(calificacion: Calificacion) -> CalificacionOut:
+    """RF-031: the rating on record, with who worked the service."""
+    return CalificacionOut(
+        id=calificacion.id,
+        reserva_id=calificacion.reserva_id,
+        puntuacion=calificacion.puntuacion,
+        comentario=calificacion.comentario,
+        creada_en=a_lima(desde_bd(calificacion.creada_en)),
+        operario=_autor(calificacion.operario),
+        operario_id=calificacion.operario_id,
+    )
+
+
+def armar_estado_calificacion(ventana: calificacion_service.Ventana) -> CalificacionEstadoOut:
+    """RF-031 + RN-10: everything the rating screen needs, in one payload."""
+    return CalificacionEstadoOut(
+        calificacion=(
+            armar_calificacion(ventana.calificacion) if ventana.calificacion is not None else None
+        ),
+        puede_calificar=ventana.abierta,
+        habilitada_en=(
+            a_lima(ventana.habilitada_en) if ventana.habilitada_en is not None else None
+        ),
+        vence_en=a_lima(ventana.vence_en) if ventana.vence_en is not None else None,
+        motivo=ventana.motivo,
+    )
+
+
 def _pago_visible(reserva: Reserva) -> Pago | None:
     """The payment that describes the reservation, or the last attempt.
 
@@ -490,6 +559,11 @@ def armar_reserva(
         cancelacion=cancelacion,
         pago=armar_pago(pago) if pago is not None else None,
         comprobante=armar_comprobante(comprobante) if comprobante is not None else None,
+        # RF-031 flow 3b: whatever the customer already said about this
+        # service, so the app can render it read-only with no extra call.
+        calificacion=(
+            armar_calificacion(reserva.calificacion) if reserva.calificacion is not None else None
+        ),
         tarifa=(
             armar_desglose_guardado(reserva.tarifa, reserva) if reserva.tarifa is not None else None
         ),

@@ -33,6 +33,10 @@ class UsuarioOut(BaseModel):
     # RF-035: the bay this worker usually takes. It only pre-selects the
     # suggestion of RF-020; it never reserves the bay for them.
     bahia_habitual: BahiaResumen | None = None
+    # RF-031 output: "promedio del OPERARIO actualizado". Zero and ``None`` for
+    # everybody who never worked a service, which is most of the table.
+    calificacion_promedio: float | None = None
+    calificaciones_count: int = 0
     creado_en: datetime
 
     @field_validator("rol", mode="before")

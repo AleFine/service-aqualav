@@ -7,13 +7,14 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.models.calidad import Calificable
 from app.models.enums import MONEDA_PREDETERMINADA
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.models.reserva import Reserva
 
 
-class Servicio(Base):
+class Servicio(Calificable, Base):
     __tablename__ = "servicio"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -30,6 +31,16 @@ class Servicio(Base):
     imagen_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
     activo: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
+    )
+    #: RF-031: "promedio del servicio actualizado". Sum and count, recomputed
+    #: from ``calificacion`` on every rating, so the average is exact and
+    #: cannot drift away from the rows it summarises. Read back through
+    #: :attr:`~app.models.calidad.Calificable.calificacion_promedio`.
+    calificaciones_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    calificaciones_suma: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

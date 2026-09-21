@@ -51,6 +51,11 @@ class ServicioOut(BaseModel):
     precio_aplicable: Dinero | None = None
     promocion: PromocionResumen | None = None
     precio_promocional: Dinero | None = None
+    #: RF-031 output: "promedio del servicio actualizado", which RF-033 then
+    #: reports on. ``None`` while nobody has rated it - a service nobody rated
+    #: is not a service everybody hated.
+    calificacion_promedio: float | None = None
+    calificaciones_count: int = 0
 
 
 class ServicioResumen(BaseModel):

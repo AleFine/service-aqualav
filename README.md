@@ -130,8 +130,9 @@ trae un valor por defecto que funciona, así que la API arranca sin tocar
 | `PASARELA_PROVEEDOR` | `simulado` | Cobro y reversión por pasarela (`RF-025`, `RF-026`, `RF-028`). `app/services/proveedores/pasarela.py` es **determinista por número de tarjeta de prueba** y su libro mayor es `transaccion_pasarela`, así que `consultar(clave)` devuelve siempre lo mismo para la misma clave de idempotencia —que es lo que prueba `RF-026 3b`—. |
 | `PASARELA_DISPONIBLE` | `true` | No hay una pasarela real que caerse, así que la caída es un interruptor. Apagarlo es la forma de ver el flujo `3a` de `RF-025`: la reserva se conserva y se **ofrece continuar con pago presencial** (`503 PASARELA_NO_DISPONIBLE`). |
 | `PASARELA_NOMBRE` | `simulada` | Lo que se guarda en `pago.pasarela`, que es a quién hay que pedirle la reversión. |
-| `ALMACENAMIENTO_PROVEEDOR` | `simulado` | Almacén de objetos (`RF-027` hoy; `RF-023` y las fotos de perfil, después). Ficheros locales bajo un directorio, con la clave —nunca una ruta— como contrato. |
+| `ALMACENAMIENTO_PROVEEDOR` | `simulado` | Almacén de objetos (`RF-027` el comprobante, `RF-023` las evidencias, `RF-006` la foto de perfil y `RF-009` la imagen del servicio). Ficheros locales bajo un directorio, con la clave —nunca una ruta— como contrato. Desde `INC-6` tiene puerta genérica: `POST /api/v1/archivos` y `GET /api/v1/archivos/{clave}`. |
 | `ALMACENAMIENTO_DIRECTORIO` | *(vacío)* | Dónde escribe el almacén. Vacío significa `aqualav-almacenamiento` dentro del directorio temporal del sistema: funciona en cualquier máquina recién clonada y no ensucia el repositorio. Pon una ruta para conservar los ficheros. |
+| `ARCHIVO_TAMANO_MAXIMO_KB` | `1024` | Tope de un objeto subido, en kilobytes. `RNF-004` M4 pide **1 MB** para las imágenes de `RF-023`; comprimirlas es del cliente móvil, y lo que hace el backend es **rechazar lo que pase del tope indicando el motivo** (`422 ARCHIVO_RECHAZADO`, flujo `3a`). |
 | `DOCUMENTOS_PROVEEDOR` | `simulado` | Generación de PDF (`RF-027`; `RF-034` después). `app/services/proveedores/documentos.py` escribe **un PDF 1.4 real a mano**: sin reportlab y sin ninguna dependencia nueva. |
 | `COMPROBANTE_SERIE` | `B001` | La serie de la numeración correlativa de `RF-027 CA-01`. |
 | `PAGO_EN_LINEA_VENTANA_MINUTOS` | `15` | `RF-014 2a`: cuánto se mantiene una reserva en «Pendiente de pago» antes de caducar. **El requisito dice quince literalmente**: la variable existe para acortarla en una demo, nunca para relajarla. |
@@ -208,6 +209,9 @@ criterios de aceptación (`CA-nn`) de los requisitos implementados:
 | `test_pagos.py` | RF-026 CA-01/02/03 |
 | `test_rbac.py` | RF-004 CA-01/02/**03** (inspección de código automatizada) |
 | `test_roles.py` | RF-004 v1.0: catálogo de roles y permisos, asignación de rol, flujos 3a y 4a, CA-02 (bitácora con el valor anterior) |
+| `test_archivos.py` | Almacén de objetos: subida y servido genéricos · `RF-006` (foto de perfil) · `RF-009` v1.0 (imagen del servicio) · el tope de 1 MB y la travesía de directorios |
+| `test_evidencias.py` | RF-023 CA-01/CA-02 y flujos `3a`/`4a` · el tope de seis fotografías por momento · la precondición «servicio en curso», derivada de `transicion_estado` |
+| `test_calificaciones.py` | RF-031 CA-01/CA-02 y flujo `3b` · `RN-10` (ventana de 7 días calendario, una sola calificación) · promedio por servicio y por operario · el aviso «puedes calificar» como plantilla |
 
 `SELECT … FOR UPDATE` no hace nada en SQLite: por eso la prueba de
 concurrencia afirma el **resultado** (exactamente un `201` y un `409`) y nunca
@@ -330,6 +334,12 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 | `GET` | `/notificaciones/dispositivos` | autenticado | RF-029 | 200 · 401 |
 | `POST` | `/notificaciones/dispositivos` | autenticado | RF-029 | 201 · 401 · 422 |
 | `DELETE` | `/notificaciones/dispositivos/{id}` | autenticado | RF-029 | 204 · **404** |
+| `GET` | `/reservas/{id}/evidencias` | `reserva:leer_propias` o `reserva:leer_todas` | RF-023 `CA-01` | 200 · **404** |
+| `POST` | `/reservas/{id}/evidencias` | `evidencia:registrar` | RF-023 `3a`, `4a`, `CA-02` | **201 / 200** · **422** |
+| `GET` | `/reservas/{id}/calificacion` | `reserva:leer_propias` o `reserva:leer_todas` | RF-031 `3a`, `3b`, RN-10 | 200 · **404** |
+| `POST` | `/reservas/{id}/calificacion` | `calificacion:crear` | RF-031 `CA-01`, `CA-02`, `3b`, RN-10 | **201 / 200** · 403 · **422** |
+| `POST` | `/archivos` | `archivo:subir` | RF-006, RF-009, RF-023 | 201 · 403 · **422** |
+| `GET` | `/archivos/{clave}` | autenticado | RF-006, RF-009, RF-023 `CA-01` | 200 (binario) · 401 · **404** |
 | `POST` | `/interno/planificador` | `planificador:ejecutar` | RF-030, RF-020 `2a`, RF-014 `2a` | 200 · 401 · 403 |
 | `GET` | `/api/v1/health` | público | RNF-010 | 200 |
 
@@ -520,6 +530,7 @@ app/
                            operacion · pago · comprobante · reembolso
                            tarifa · promocion · eventos
                            notificacion · recordatorio · seguimiento
+                           evidencia · calificacion · archivo
                            planificador · notificador · politica_cancelacion
                            ensamblador
                            proveedores/ (correo, push, pasarela,
@@ -529,6 +540,7 @@ app/
                            admin_usuarios · admin_bahias · agenda
                            disponibilidad · reservas · operacion · asignacion
                            pagos · comprobantes · reembolsos · estados
+                           calidad (evidencias y calificaciones) · archivos
                            notificaciones · interno · health
   seed.py                  carga inicial idempotente
 migrations/                Alembic
