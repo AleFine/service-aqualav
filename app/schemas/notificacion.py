@@ -93,3 +93,5 @@ class PlanificadorOut(BaseModel):
     reservas_promovidas: list[int] = Field(default_factory=list)
     #: RF-014 flow 2a: the online bookings whose fifteen minutes ran out.
     reservas_expiradas: list[int] = Field(default_factory=list)
+    #: RF-034 flow 4a: the queued exports this sweep generated.
+    exportaciones_generadas: list[int] = Field(default_factory=list)

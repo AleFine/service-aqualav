@@ -11,6 +11,7 @@ from app.api.v1 import (
     agenda,
     archivos,
     asignacion,
+    auditoria,
     auth,
     calidad,
     catalogo,
@@ -24,6 +25,7 @@ from app.api.v1 import (
     pagos,
     perfil,
     reembolsos,
+    reportes,
     reservas,
     servicios,
     vehiculos,
@@ -46,6 +48,10 @@ api_router.include_router(agenda.router)
 api_router.include_router(disponibilidad.router)
 api_router.include_router(estados.router)
 api_router.include_router(notificaciones.router)
+# RF-033 / RF-034: el tablero, los reportes y sus exportaciones.
+api_router.include_router(reportes.router)
+# RF-036: la bitácora. Solo GET, y eso ES el CA-02.
+api_router.include_router(auditoria.router)
 # RF-032: points, benefits and redemption coupons.
 api_router.include_router(fidelizacion.router)
 # RF-006 / RF-009 / RF-023: the generic object door of the simulated store.

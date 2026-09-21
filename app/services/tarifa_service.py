@@ -231,6 +231,10 @@ def definir_factor(db: Session, datos: FactorIn, autor: Usuario) -> FactorTipoVe
             "factor_anterior": anterior.factor_milesimas if anterior else None,
             "factor_nuevo": factor.factor_milesimas,
         },
+        # A factor change IS a price change (RN-04), so RF-036 CA-01 applies
+        # to it exactly as it applies to ``servicio_precio``.
+        valor_anterior=({"factor_milesimas": anterior.factor_milesimas} if anterior else None),
+        valor_nuevo={"factor_milesimas": factor.factor_milesimas},
     )
     db.commit()
     db.refresh(factor)

@@ -1,4 +1,4 @@
-"""Domain event log helper (EXTENSION POINT P7).
+"""Domain event log helper (EXTENSION POINT P7), and RF-036 flow 2a.
 
 Every mutation listed in the contract writes one row in ``evento_dominio``.
 The MVP only ever wrote it; INC-6 is the first increment that READS it back, and
@@ -6,14 +6,33 @@ for a reason worth knowing: ``reserva.calificacion_habilitada`` is the only
 record of when the rating window of RN-10 opened, and of who was working the
 service at that moment. Back-filling either is impossible, which is precisely
 the argument for having written the log from day one.
+
+INC-8 turns the log into the audit trail RF-036 asks for, and that puts one
+extra duty on this module. Flow 2a says "si falla el registro de auditoria, la
+operacion principal se revierte": since the row is appended inside the CALLER'S
+unit of work, a failed append can be turned into exactly that - roll the unit
+of work back and raise, so the caller never reaches its ``commit()`` and the
+operation it was auditing leaves no trace of having happened. Nothing has to
+remember to compensate; the guarantee is a property of where the row is
+written.
+
+``valor_anterior`` / ``valor_nuevo`` are the other half of RF-036: a change
+carries both sides in columns of their own, so the audit screen renders a
+before and an after without knowing that a price change spells them
+``monto_anterior``/``monto_nuevo`` and a role change spells them otherwise.
 """
 
+import logging
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.errors import AuditoriaNoRegistrada, detalle
 from app.models import EventoDominio
 from app.repositories import evento as evento_repo
+
+logger = logging.getLogger("aqualav.auditoria")
 
 # Entities, kept as constants so a typo cannot silently split the log in two.
 ENTIDAD_USUARIO = "usuario"
@@ -27,6 +46,8 @@ ENTIDAD_COMPROBANTE = "comprobante"
 ENTIDAD_REEMBOLSO = "reembolso"
 ENTIDAD_BAHIA = "bahia"
 ENTIDAD_AGENDA = "agenda"
+#: RF-034: an export is a thing somebody asked for and can be asked about.
+ENTIDAD_REPORTE = "reporte"
 ENTIDAD_PAQUETE = "paquete"
 ENTIDAD_PROMOCION = "promocion"
 ENTIDAD_ADICIONAL = "servicio_adicional"
@@ -175,6 +196,20 @@ AGENDA_BLOQUEO_ELIMINADO = "agenda.bloqueo_eliminado"
 AGENDA_DIA_NO_LABORABLE_CREADO = "agenda.dia_no_laborable_creado"
 AGENDA_DIA_NO_LABORABLE_ELIMINADO = "agenda.dia_no_laborable_eliminado"
 AGENDA_HORARIO_ACTUALIZADO = "agenda.horario_actualizado"
+#: RF-034: the export was asked for, produced, or could not be produced.
+REPORTE_EXPORTACION_SOLICITADA = "reporte.exportacion_solicitada"
+REPORTE_EXPORTACION_GENERADA = "reporte.exportacion_generada"
+REPORTE_EXPORTACION_FALLIDA = "reporte.exportacion_fallida"
+
+#: RF-036 "autenticaciones". These two actions are NOT written here: they
+#: are the names the audit trail PROJECTS ``intento_login`` under, so a
+#: filter by "tipo de evento" reaches a login exactly like it reaches a
+#: price change. INC-3 already writes one row per attempt (successful or
+#: not, with the error code and never the password); copying them into
+#: ``evento_dominio`` would be a second, divergeable record of the same
+#: fact, so the bitacora reads the original instead.
+USUARIO_AUTENTICACION_EXITOSA = "usuario.autenticacion_exitosa"
+USUARIO_AUTENTICACION_FALLIDA = "usuario.autenticacion_fallida"
 
 
 def registrar_evento(
@@ -184,17 +219,48 @@ def registrar_evento(
     accion: str,
     autor_id: int | None = None,
     datos: dict[str, Any] | None = None,
+    *,
+    valor_anterior: dict[str, Any] | None = None,
+    valor_nuevo: dict[str, Any] | None = None,
 ) -> EventoDominio:
-    """Append one row to the event log.
+    """Append one row to the event log, or revert everything (RF-036 flow 2a).
 
-    ``datos`` must be JSON serializable: callers pass ISO strings, never
-    ``datetime`` instances.
+    ``datos``, ``valor_anterior`` and ``valor_nuevo`` must be JSON
+    serializable: callers pass ISO strings, never ``datetime`` instances.
+
+    ``valor_anterior``/``valor_nuevo`` are for CHANGES - what the value was and
+    what it became (RF-036 CA-01). An event that is an occurrence rather than a
+    change leaves both NULL: a payment replaced nothing.
+
+    If the append fails, the unit of work is rolled back and
+    :class:`~app.core.errors.AuditoriaNoRegistrada` is raised. The caller's
+    ``commit()`` is therefore never reached and the operation being audited is
+    undone in full, which is flow 2a read literally. The incident is logged at
+    ERROR level, which is the "se notifica el incidente" half.
     """
-    return evento_repo.crear(
-        db,
-        entidad=entidad,
-        entidad_id=entidad_id,
-        accion=accion,
-        autor_id=autor_id,
-        datos=dict(datos or {}),
-    )
+    try:
+        return evento_repo.crear(
+            db,
+            entidad=entidad,
+            entidad_id=entidad_id,
+            accion=accion,
+            autor_id=autor_id,
+            datos=dict(datos or {}),
+            valor_anterior=dict(valor_anterior) if valor_anterior is not None else None,
+            valor_nuevo=dict(valor_nuevo) if valor_nuevo is not None else None,
+        )
+    except SQLAlchemyError as error:
+        logger.error(
+            "INCIDENTE DE AUDITORIA: no se pudo registrar %s sobre %s/%s: %s",
+            accion,
+            entidad,
+            entidad_id,
+            error,
+        )
+        # Undo the operation this row was describing. The session is unusable
+        # after a failed flush anyway, so the rollback is both the requirement
+        # and the only way to leave the session in a state anybody can close.
+        db.rollback()
+        raise AuditoriaNoRegistrada(
+            detalles=[detalle(None, f"No se pudo auditar la acción «{accion}».")]
+        ) from error

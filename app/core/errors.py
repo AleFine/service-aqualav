@@ -590,6 +590,63 @@ class BeneficioNoDisponible(AppError):
 
 
 # --------------------------------------------------------------------------
+# Panel, reports and audit trail (RF-033, RF-034, RF-036)
+# --------------------------------------------------------------------------
+class RangoDemasiadoAmplio(AppError):
+    """RF-034 flow 2a / CA-02 and RF-036 flow 3a, which are the same rule.
+
+    "Rango maximo 12 meses" and "consulta muy amplia -> se pide acotar el
+    rango" describe one refusal, so there is one error for both. The message
+    has to be explanatory (CA-02 says so literally): it names the limit and
+    what to do about it, because a report that is refused without a number is
+    a report somebody retries at random.
+    """
+
+    codigo = "RANGO_DEMASIADO_AMPLIO"
+    http_status = 422
+    mensaje = (
+        "El rango solicitado supera los 12 meses permitidos. "
+        "Acota las fechas y vuelve a consultar."
+    )
+
+
+class AuditoriaNoRegistrada(AppError):
+    """RF-036 flow 2a: the audit row could not be written.
+
+    The requirement is blunt - "si falla el registro de auditoria LA OPERACION
+    PRINCIPAL SE REVIERTE y se notifica el incidente" - and so is the answer:
+    ``eventos.registrar_evento`` rolls the unit of work back and raises this,
+    so the caller never reaches its ``commit()``. A 500 rather than a 4xx
+    because nothing the client sent is wrong; the shop's own trail is broken
+    and the safe behaviour is to refuse to do untraceable work.
+    """
+
+    codigo = "AUDITORIA_NO_REGISTRADA"
+    http_status = 500
+    mensaje = (
+        "No pudimos registrar la operación en la bitácora de auditoría, "
+        "así que la revertimos por completo. Vuelve a intentarlo; si persiste, "
+        "avisa al administrador."
+    )
+
+
+class ExportacionNoDisponible(AppError):
+    """RF-034 flow 4a: the export exists but its file does not, yet or ever.
+
+    A 409 and not a 404: the request is on record and the person is asking the
+    right resource, it is simply not finished. Saying so is what lets the app
+    wait instead of showing "no encontrado" for something that is on its way.
+    """
+
+    codigo = "EXPORTACION_NO_DISPONIBLE"
+    http_status = 409
+    mensaje = (
+        "La exportación todavía no tiene archivo disponible. "
+        "Espera a que termine de generarse y vuelve a descargarla."
+    )
+
+
+# --------------------------------------------------------------------------
 # Generic
 # --------------------------------------------------------------------------
 class RecursoNoEncontrado(AppError):
@@ -664,6 +721,9 @@ ERRORES_POR_CODIGO: dict[str, type[AppError]] = {
         PlazoDeCalificacionVencido,
         PuntosInsuficientes,
         BeneficioNoDisponible,
+        RangoDemasiadoAmplio,
+        AuditoriaNoRegistrada,
+        ExportacionNoDisponible,
         RecursoNoEncontrado,
         ErrorDeValidacion,
         DatosInvalidos,

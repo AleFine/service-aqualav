@@ -69,6 +69,11 @@ def aplicar_rol(db: Session, usuario: Usuario, rol: Rol, autor: Usuario) -> bool
             "rol_nuevo_id": rol.id,
             "rol_nuevo": rol.nombre,
         },
+        # RF-036 lists "cambios de rol" among the sensitive operations, and a
+        # change is audited with both sides (CA-01 states the rule using a
+        # price, but the rule is about changes, not about prices).
+        valor_anterior={"rol_id": anterior.id, "rol": anterior.nombre},
+        valor_nuevo={"rol_id": rol.id, "rol": rol.nombre},
     )
     auth_service.revocar_tokens_de_refresco(db, usuario.id, motivo=eventos.USUARIO_ROL_CAMBIADO)
     return True

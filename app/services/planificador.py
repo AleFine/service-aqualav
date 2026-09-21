@@ -11,7 +11,7 @@ Two shapes of the same work:
   test suite turns it off explicitly, so nothing in the suite ever depends on
   wall-clock time.
 
-It does three things per sweep:
+It does four things per sweep:
 
 1. **Reminders (RF-030)** for the reservations starting within the next two
    hours.
@@ -21,7 +21,12 @@ It does three things per sweep:
    customer who made the booking, so nothing about it is a special case and
    RN-05 decides the penalty exactly as it would if they had cancelled by
    hand (at that point the service is still hours away, so it is zero).
-3. **Promotes the waiting queue (RF-020 flow 2a)**, which INC-1B left as an
+3. **Generates the queued report exports (RF-034 flow 4a)**, the half of
+   "exportacion asincrona con notificacion al finalizar" that makes it
+   asynchronous. INC-8 puts them here for the same reason the reminders are
+   here: the sweep is a pure function the tests call directly, so "later"
+   never means "wait for a real clock".
+4. **Promotes the waiting queue (RF-020 flow 2a)**, which INC-1B left as an
    explicit opening: until now a queued vehicle only got its bay when the
    receptionist retried ``POST /reservas/{id}/asignacion`` by hand. The
    promotion runs ON BEHALF of whoever queued it - the author is read back from
@@ -53,6 +58,7 @@ from app.schemas import AsignacionIn
 from app.services import (
     asignacion_service,
     eventos,
+    exportacion_service,
     operacion_service,
     recordatorio_service,
     reserva_service,
@@ -73,6 +79,8 @@ class ResultadoPlanificador:
     promovidas: list[int] = field(default_factory=list)
     #: RF-014 flow 2a: ids of the bookings whose payment window ran out.
     expiradas: list[int] = field(default_factory=list)
+    #: RF-034 flow 4a: ids of the exports this sweep turned into a file.
+    exportaciones: list[int] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -202,6 +210,20 @@ def _promover_cola(db: Session, **proveedores) -> list[int]:
 
 
 # --------------------------------------------------------------------------
+# RF-034 flow 4a: the queued exports
+# --------------------------------------------------------------------------
+def _generar_exportaciones(db: Session, momento: datetime, **proveedores) -> list[int]:
+    """Turn the pending export requests into files and tell who asked.
+
+    The whole body is one delegation on purpose: an export knows how to build
+    itself, store itself and notify, and the scheduler's job is to decide WHEN,
+    not to learn how. The notice goes out through a template and an event, the
+    way INC-5 asked for everything that notifies.
+    """
+    return exportacion_service.procesar_pendientes(db, momento, **proveedores)
+
+
+# --------------------------------------------------------------------------
 # The scheduler itself
 # --------------------------------------------------------------------------
 def ejecutar_pendientes(
@@ -221,6 +243,8 @@ def ejecutar_pendientes(
     # follows can hand it to whoever is waiting in the very same sweep.
     expiradas = _caducar_pagos(db, momento, **proveedores)
     promovidas = _promover_cola(db, **proveedores)
+    # Last: an export of "today" should see everything the sweep just did.
+    exportaciones = _generar_exportaciones(db, momento, **proveedores)
 
     db.commit()
     return ResultadoPlanificador(
@@ -228,6 +252,7 @@ def ejecutar_pendientes(
         recordatorios=recordatorios,
         promovidas=promovidas,
         expiradas=expiradas,
+        exportaciones=exportaciones,
     )
 
 
@@ -252,12 +277,19 @@ async def _bucle() -> None:  # pragma: no cover - exercised by running the API
         except Exception as error:  # noqa: BLE001 - the loop must survive anything
             logger.warning("El barrido del planificador falló: %s", error)
             continue
-        if resultado.recordatorios or resultado.promovidas or resultado.expiradas:
+        if (
+            resultado.recordatorios
+            or resultado.promovidas
+            or resultado.expiradas
+            or resultado.exportaciones
+        ):
             logger.info(
-                "barrido: %s recordatorio(s), %s caducada(s), %s reserva(s) promovida(s)",
+                "barrido: %s recordatorio(s), %s caducada(s), %s promovida(s), "
+                "%s exportacion(es)",
                 len(resultado.recordatorios),
                 len(resultado.expiradas),
                 len(resultado.promovidas),
+                len(resultado.exportaciones),
             )
 
 

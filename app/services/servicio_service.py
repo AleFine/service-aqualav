@@ -161,10 +161,15 @@ def actualizar(
     """Patch a service. A new amount opens a new price period, never an UPDATE."""
     servicio = obtener(db, servicio_id)
     cambios: dict[str, object] = {}
+    # RF-036 CA-01 / RNF-014: an audit entry for a CHANGE has to carry both
+    # sides. They are collected here rather than reconstructed later because
+    # the previous value stops existing the moment the attribute is assigned.
+    anteriores: dict[str, object] = {}
 
     for campo in ("nombre", "descripcion", "categoria", "imagen_url", "duracion_min", "activo"):
         valor = getattr(datos, campo)
         if valor is not None and valor != getattr(servicio, campo):
+            anteriores[campo] = getattr(servicio, campo)
             setattr(servicio, campo, valor)
             cambios[campo] = valor
 
@@ -186,6 +191,8 @@ def actualizar(
             eventos.SERVICIO_ACTUALIZADO,
             autor_id=autor.id,
             datos=cambios,
+            valor_anterior=anteriores,
+            valor_nuevo=cambios,
         )
 
     if cambia_monto:
@@ -207,6 +214,19 @@ def actualizar(
             datos={
                 "monto_anterior": anterior.monto_centimos if anterior else None,
                 "monto_nuevo": int(datos.monto_centimos),
+                "moneda": moneda_pedida,
+            },
+            # RF-036 CA-01 verbatim: "dado un cambio de precio, cuando se
+            # consulta la bitácora, entonces figura el valor anterior y el
+            # nuevo". This is the requirement's own example, so it is the one
+            # place where the two columns are not optional.
+            valor_anterior=(
+                {"monto_centimos": anterior.monto_centimos, "moneda": anterior.moneda}
+                if anterior
+                else None
+            ),
+            valor_nuevo={
+                "monto_centimos": int(datos.monto_centimos),
                 "moneda": moneda_pedida,
             },
         )

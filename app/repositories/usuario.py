@@ -1,5 +1,6 @@
 """Data access for ``usuario``, ``rol`` and ``permiso``."""
 
+from collections.abc import Iterable
 from datetime import datetime
 
 from sqlalchemy import func, select
@@ -94,6 +95,14 @@ def listar_paginado(
         .offset((pagina - 1) * tamanio)
     )
     return list(db.scalars(consulta).unique().all()), total
+
+
+def listar_por_ids(db: Session, usuario_ids: Iterable[int]) -> dict[int, Usuario]:
+    """``{id: usuario}`` in one query, for reports that group by person."""
+    ids = {identificador for identificador in usuario_ids if identificador is not None}
+    if not ids:
+        return {}
+    return {fila.id: fila for fila in db.scalars(select(Usuario).where(Usuario.id.in_(ids))).all()}
 
 
 def listar_con_permiso(db: Session, codigo_permiso: str) -> list[Usuario]:

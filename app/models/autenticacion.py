@@ -11,8 +11,10 @@ paper into state the server can actually check:
 * ``token_refresco`` - the revocation list of RF-005. A refresh token is a
   self-contained JWT, so the only way to retire one before it expires is to
   keep its ``jti`` here and look it up;
-* ``intento_login`` - the authentication trail RNF-014 asks for and RF-036
-  will read.
+* ``intento_login`` - the authentication trail RNF-014 asks for, and which
+  INC-8 finally reads: the audit log of RF-036 is the union of this table and
+  ``evento_dominio``, because an authentication is the one sensitive operation
+  the domain event log never carried.
 
 No raw token is ever stored: what is persisted is the SHA-256 of a
 ``secrets.token_urlsafe`` value, which the mail carries and the database never
@@ -123,7 +125,13 @@ class IntentoLogin(Base):
     """
 
     __tablename__ = "intento_login"
-    __table_args__ = (Index("ix_intento_login_correo_momento", "correo", "ocurrido_en"),)
+    __table_args__ = (
+        Index("ix_intento_login_correo_momento", "correo", "ocurrido_en"),
+        # RF-036: "filtros por usuario ... y fecha". The index above answers a
+        # different question - "what happened to this ADDRESS", which is what
+        # the lockout of RNF-012 asks - and cannot serve this one.
+        Index("ix_intento_login_usuario_momento", "usuario_id", "ocurrido_en"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     correo: Mapped[str] = mapped_column(String(160), nullable=False)

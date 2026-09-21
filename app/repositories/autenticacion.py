@@ -4,6 +4,7 @@ Queries only: whether an expired token means "ask for another one" or "this
 never existed" is a decision, and decisions live in the service layer.
 """
 
+from collections.abc import Iterable
 from datetime import datetime
 
 from sqlalchemy import select, update
@@ -166,6 +167,15 @@ def registrar_intento(
     db.add(fila)
     db.flush()
     return fila
+
+
+def listar_intentos_por_ids(db: Session, intento_ids: Iterable[int]) -> dict[int, IntentoLogin]:
+    """``{id: intento}`` for hydrating a page of the audit trail (RF-036)."""
+    ids = list(intento_ids)
+    if not ids:
+        return {}
+    consulta = select(IntentoLogin).where(IntentoLogin.id.in_(ids))
+    return {fila.id: fila for fila in db.scalars(consulta).all()}
 
 
 def listar_intentos(db: Session, correo: str) -> list[IntentoLogin]:

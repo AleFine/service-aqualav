@@ -95,6 +95,24 @@ class EstadoPago(str, Enum):
     REEMBOLSADO_TOTAL = "reembolsado_total"
 
 
+#: Payment states that once brought money into the shop (RF-033, RF-034).
+#:
+#: Wider than :data:`ESTADOS_PAGO_COBRADO` on purpose: a voided or fully
+#: refunded payment is NOT revenue any more, but it WAS collected and the
+#: reversal is part of the story a revenue report has to tell. What each row
+#: is worth today is ``pago.saldo_centimos``, so the report shows the gross,
+#: what went back and the net without any of the three being guessed.
+#: ``rechazado`` and ``pendiente`` are absent: no money ever arrived.
+ESTADOS_PAGO_INGRESADO: frozenset[str] = frozenset(
+    {
+        EstadoPago.CONFIRMADO.value,
+        EstadoPago.REEMBOLSADO_PARCIAL.value,
+        EstadoPago.REEMBOLSADO_TOTAL.value,
+        EstadoPago.ANULADO.value,
+    }
+)
+
+
 #: Payment states that still count as "the shop has the money" (RN-09).
 #: ``reembolsado_parcial`` is in the set because the service WAS paid; what was
 #: given back afterwards is a reversal, not an unpaid service.
@@ -300,6 +318,51 @@ class EventoNotificacion(str, Enum):
     #: event and nothing else: ``reserva_service.reprogramar`` hands the name
     #: to ``notificacion_service.despachar`` and the rows decide the rest.
     REPROGRAMACION = "reprogramacion"
+    #: RF-034 flow 4a: "volumen elevado -> exportacion asincrona CON
+    #: NOTIFICACION al finalizar". The notice is a template and an event like
+    #: every other one - INC-5 asked for rows, not a hand written dispatch -
+    #: which is why an export that finishes at three in the morning still
+    #: reaches whoever asked for it without this increment writing a message.
+    EXPORTACION = "exportacion"
+
+
+class TipoReporte(str, Enum):
+    """The reports RF-034 names, plus the audit log RF-036 exports.
+
+    The four of RF-034 - "servicios, ingresos, productividad por operario y
+    ocupacion por bahia" - and the audit trail, which RF-036 also asks to be
+    exportable. They share one enumeration because they share one exporter:
+    every one of them is a heading, a list of columns and a list of rows, and
+    turning that into CSV or into PDF must not be written five times.
+    """
+
+    SERVICIOS = "servicios"
+    INGRESOS = "ingresos"
+    PRODUCTIVIDAD = "productividad"
+    OCUPACION = "ocupacion"
+    AUDITORIA = "auditoria"
+
+
+class FormatoReporte(str, Enum):
+    """The two formats RF-034 asks for. CSV is text; PDF is the hand-written
+    generator INC-4 already built (``ProveedorDocumentos.reporte``)."""
+
+    CSV = "csv"
+    PDF = "pdf"
+
+
+class EstadoExportacion(str, Enum):
+    """Lifecycle of one export request (RF-034 flow 4a).
+
+    ``pendiente`` is the whole point of that flow: the request was accepted,
+    the file is not there yet, and the scheduler is what turns it into
+    ``generado`` and tells the person who asked. ``fallido`` keeps the reason
+    on the row instead of losing it, exactly like a refused refund.
+    """
+
+    PENDIENTE = "pendiente"
+    GENERADO = "generado"
+    FALLIDO = "fallido"
 
 
 class PlataformaDispositivo(str, Enum):
@@ -434,6 +497,13 @@ CENTIMOS_POR_PUNTO = 1000
 #: what the redemption reads, so a shop that reprices its loyalty programme
 #: updates a row.
 PUNTOS_LAVADO_BASICO = 100
+
+#: RF-034 flow 2a / RF-036 flow 3a: "rango maximo 12 meses" and "consulta muy
+#: amplia -> se pide acotar el rango". One number for both, because it is one
+#: rule: a report and an audit query are the same scan over the same period.
+#: Days rather than months so the comparison is one subtraction, and 366 so a
+#: full leap year still fits inside "twelve months".
+RANGO_MAXIMO_DIAS = 366
 
 #: Neutral vehicle factor, in thousandths: 1000 = 1.0 (RN-04).
 #: Factors are integers on purpose - ``3000 x 1.3`` stops being ``3900`` the

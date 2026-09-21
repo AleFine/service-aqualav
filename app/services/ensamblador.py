@@ -31,6 +31,7 @@ from app.models import (
     PuntosMovimiento,
     Recordatorio,
     Reembolso,
+    ReporteExportacion,
     Reserva,
     ReservaTarifaDesglose,
     Rol,
@@ -42,6 +43,7 @@ from app.schemas import (
     AdicionalAplicadoOut,
     AdicionalOut,
     AsignacionOut,
+    AuditoriaOut,
     BahiaOut,
     BahiaResumen,
     BeneficioOut,
@@ -50,6 +52,7 @@ from app.schemas import (
     CancelacionOut,
     ClienteResumen,
     ColaEsperaOut,
+    ColumnaOut,
     ComprobanteOut,
     CuponCanjeOut,
     DesgloseOut,
@@ -57,6 +60,7 @@ from app.schemas import (
     Dinero,
     DispositivoOut,
     EvidenciaOut,
+    ExportacionOut,
     FactorOut,
     HistorialItem,
     MovimientoPuntosOut,
@@ -67,8 +71,10 @@ from app.schemas import (
     PermisoOut,
     PromocionOut,
     PromocionResumen,
+    PuntoTendenciaOut,
     RecordatorioOut,
     ReembolsoOut,
+    ReporteOut,
     ReservaOut,
     ResultadoAsignacionOut,
     RolOut,
@@ -76,14 +82,17 @@ from app.schemas import (
     ServicioOut,
     ServicioResumen,
     SugerenciaOut,
+    TableroOut,
     UsuarioOut,
     VehiculoResumen,
 )
 from app.services import (
     archivo_service,
+    auditoria_service,
     calificacion_service,
     fidelizacion_service,
     operacion_service,
+    reporte_service,
     reserva_service,
     seguimiento_service,
     tarifa_service,
@@ -673,3 +682,94 @@ def armar_reserva(
 
 def armar_reservas(db: Session, reservas: list[Reserva], permisos: list[str]) -> list[ReservaOut]:
     return [armar_reserva(db, reserva, permisos) for reserva in reservas]
+
+
+# --------------------------------------------------------------------------
+# Panel, reports, exports and the audit trail (RF-033, RF-034, RF-036)
+# --------------------------------------------------------------------------
+#: Where an export downloads from (RF-034 "Salidas").
+RUTA_EXPORTACIONES = "/api/v1/reportes/exportaciones"
+
+
+def armar_reporte(reporte: reporte_service.Reporte) -> ReporteOut:
+    """A detailed report, columns included.
+
+    The response DESCRIBES its own table instead of assuming the client
+    already knows it: five reports share one renderer here and one screen
+    there, and a client that hardcoded five column lists would drift from the
+    server the first time a report grows a column.
+    """
+    return ReporteOut(
+        tipo=reporte.tipo,
+        titulo=reporte.titulo,
+        desde=reporte.desde,
+        hasta=reporte.hasta,
+        columnas=[
+            ColumnaOut(clave=columna.clave, titulo=columna.titulo, tipo=columna.tipo)
+            for columna in reporte.columnas
+        ],
+        filas=reporte.filas,
+        totales=reporte.totales,
+        generado_en=reporte.generado_en,
+    )
+
+
+def armar_tablero(tablero: reporte_service.Tablero) -> TableroOut:
+    """The indicator cards of RF-033. Every number comes from a report."""
+    return TableroOut(
+        desde=tablero.desde,
+        hasta=tablero.hasta,
+        servicios_atendidos=tablero.servicios_atendidos,
+        ingresos=Dinero.de_centimos(tablero.ingresos_centimos, tablero.moneda),
+        ticket_promedio=Dinero.de_centimos(tablero.ticket_promedio_centimos, tablero.moneda),
+        ocupacion_porcentaje=tablero.ocupacion_porcentaje,
+        tiempo_promedio_min=tablero.tiempo_promedio_min,
+        calificacion_media=tablero.calificacion_media,
+        calificaciones=tablero.calificaciones,
+        operarios_activos=tablero.operarios_activos,
+        sin_datos=tablero.sin_datos,
+        aviso=tablero.aviso,
+        generado_en=tablero.generado_en,
+        tendencia=[
+            PuntoTendenciaOut(
+                fecha=punto.fecha,
+                servicios=punto.servicios,
+                ingresos=Dinero.de_centimos(punto.ingresos_centimos, tablero.moneda),
+            )
+            for punto in tablero.tendencia
+        ],
+    )
+
+
+def armar_exportacion(fila: ReporteExportacion) -> ExportacionOut:
+    """One export request. The download link appears only once it can work."""
+    return ExportacionOut(
+        id=fila.id,
+        tipo=fila.tipo,
+        formato=fila.formato,
+        estado=fila.estado,
+        filas=fila.filas,
+        filtros=dict(fila.filtros or {}),
+        solicitado_por=_autor(fila.solicitado_por),
+        solicitado_en=a_lima(desde_bd(fila.solicitado_en)),
+        generado_en=(a_lima(desde_bd(fila.generado_en)) if fila.generado_en is not None else None),
+        error=fila.error,
+        archivo_url=(f"{RUTA_EXPORTACIONES}/{fila.id}/archivo" if fila.archivo_key else None),
+    )
+
+
+def armar_auditoria(fila: auditoria_service.Fila) -> AuditoriaOut:
+    """One entry of the audit trail (RF-036)."""
+    return AuditoriaOut(
+        fuente=fila.fuente,
+        id=fila.fuente_id,
+        ocurrido_en=a_lima(fila.ocurrido_en),
+        accion=fila.accion,
+        entidad=fila.entidad,
+        entidad_id=fila.entidad_id,
+        autor_id=fila.autor_id,
+        autor=fila.autor,
+        valor_anterior=fila.valor_anterior,
+        valor_nuevo=fila.valor_nuevo,
+        detalle=fila.detalle,
+    )

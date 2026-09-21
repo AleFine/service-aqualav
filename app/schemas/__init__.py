@@ -23,6 +23,7 @@ from app.schemas.asignacion import (
     ResultadoAsignacionOut,
     SugerenciaOut,
 )
+from app.schemas.auditoria import AuditoriaOut, BitacoraOut
 from app.schemas.auth import (
     LoginIn,
     LogoutIn,
@@ -81,6 +82,14 @@ from app.schemas.pago import (
     PagoOut,
     ReembolsoCrear,
     ReembolsoOut,
+)
+from app.schemas.reporte import (
+    ColumnaOut,
+    ExportacionIn,
+    ExportacionOut,
+    PuntoTendenciaOut,
+    ReporteOut,
+    TableroOut,
 )
 from app.schemas.reserva import (
     AtencionInmediataIn,
@@ -151,11 +160,13 @@ __all__ = [
     "AsignacionOut",
     "AsignacionRolIn",
     "AtencionInmediataIn",
+    "AuditoriaOut",
     "BahiaActualizar",
     "BahiaCrear",
     "BahiaOut",
     "BahiaResumen",
     "BeneficioOut",
+    "BitacoraOut",
     "BloqueDisponible",
     "BloqueoIn",
     "BloqueoOut",
@@ -170,6 +181,7 @@ __all__ = [
     "CheckOutIn",
     "ClienteResumen",
     "ColaEsperaOut",
+    "ColumnaOut",
     "ComprobanteOut",
     "ContenidoError",
     "CuponCanjeOut",
@@ -183,6 +195,8 @@ __all__ = [
     "DispositivoOut",
     "ErrorBody",
     "EstadoCatalogoOut",
+    "ExportacionIn",
+    "ExportacionOut",
     "EvidenciaIn",
     "EvidenciaOut",
     "FactorIn",
@@ -214,6 +228,7 @@ __all__ = [
     "PromocionIn",
     "PromocionOut",
     "PromocionResumen",
+    "PuntoTendenciaOut",
     "RecordatorioOut",
     "RecordatorioRespuestaIn",
     "RecuperacionIn",
@@ -222,6 +237,7 @@ __all__ = [
     "ReenvioVerificacionIn",
     "RefreshIn",
     "RegistroIn",
+    "ReporteOut",
     "ReprogramacionIn",
     "ReservaCrear",
     "ReservaOut",
@@ -236,6 +252,7 @@ __all__ = [
     "ServicioOut",
     "ServicioResumen",
     "SugerenciaOut",
+    "TableroOut",
     "TarifaCalculoIn",
     "TokenOut",
     "UsuarioInternoActualizar",

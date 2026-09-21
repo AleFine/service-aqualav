@@ -30,17 +30,25 @@ RESPUESTAS = {
     "/planificador",
     response_model=PlanificadorOut,
     responses=RESPUESTAS,
-    summary="Ejecutar el barrido del planificador (recordatorios, caducidad de pago y cola)",
+    summary=(
+        "Ejecutar el barrido del planificador "
+        "(recordatorios, caducidad de pago, cola y exportaciones)"
+    ),
 )
 def ejecutar_planificador(
     _: Usuario = Depends(requiere_permiso(PERMISO_PLANIFICADOR)),
     db: Session = Depends(get_db),
 ) -> PlanificadorOut:
-    """RF-030 y RF-014 `2a`: recuerda, caduca los pagos vencidos y promueve la cola."""
+    """RF-030, RF-014 `2a` y RF-034 `4a`.
+
+    Recuerda, caduca los pagos vencidos, promueve la cola y genera las
+    exportaciones encoladas notificando a quien las pidió.
+    """
     resultado = planificador.ejecutar_pendientes(db)
     return PlanificadorOut(
         momento=resultado.momento,
         recordatorios_enviados=len(resultado.recordatorios),
         reservas_promovidas=resultado.promovidas,
         reservas_expiradas=resultado.expiradas,
+        exportaciones_generadas=resultado.exportaciones,
     )

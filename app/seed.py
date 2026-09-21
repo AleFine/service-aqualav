@@ -90,6 +90,10 @@ PERMISOS: dict[str, str] = {
     "reserva:reprogramar": "Mover una reserva a otro bloque horario (RF-015).",
     "fidelizacion:leer": "Consultar el saldo de puntos y los beneficios canjeables.",
     "fidelizacion:canjear": "Canjear puntos por un beneficio y obtener su cupón.",
+    "reporte:leer": (
+        "Consultar el tablero de indicadores y los reportes exportables (RF-033, RF-034)."
+    ),
+    "auditoria:leer": "Consultar y exportar la bitácora de auditoría (RF-036).",
 }
 
 #: role name -> Spanish description (RF-004 v1.0: four roles).
@@ -177,7 +181,10 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
         "archivo:subir",
         "evidencia:registrar",
     ),
-    # The administrator is a superset of every permission.
+    # The administrator is a superset of every permission - which is also how
+    # ``reporte:leer`` and ``auditoria:leer`` are granted: RF-033, RF-034 and
+    # RF-036 all name the Administrator as their only human actor, so neither
+    # the counter nor the bay gets them, and neither needs a line here.
     "administrador": tuple(PERMISOS),
 }
 
@@ -422,6 +429,13 @@ CANALES_POR_EVENTO: dict[str, tuple[str, ...]] = {
         CanalNotificacion.EN_APP.value,
         CanalNotificacion.CORREO.value,
     ),
+    # RF-034 flow 4a: "exportacion asincrona CON NOTIFICACION al finalizar".
+    # Mail and the in-app feed, no push: an administrator who asked for a
+    # twelve-month CSV is at a desk, not waiting for their phone to buzz.
+    EventoNotificacion.EXPORTACION.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+    ),
     # Internal notices: they belong in the app, not in somebody's inbox.
     EventoNotificacion.ASIGNACION.value: (CanalNotificacion.EN_APP.value,),
     EventoNotificacion.ESTADO_CAMBIADO.value: (CanalNotificacion.EN_APP.value,),
@@ -561,6 +575,19 @@ TEXTOS: dict[tuple[str, str], tuple[str, str]] = {
     (EventoNotificacion.ESTADO_CAMBIADO.value, Idioma.EN.value): (
         "Your booking {codigo} moved on",
         "Booking {codigo} is now in «{estado}». Estimated hand-over: {entrega}.",
+    ),
+    # RF-034 flow 4a. The placeholders are the export's own fields, not a
+    # reservation's: ``notificacion_service.despachar`` accepts a notice with
+    # no reservation behind it, and this is the first one that has none.
+    (EventoNotificacion.EXPORTACION.value, Idioma.ES.value): (
+        "Tu reporte «{reporte}» está listo",
+        "Terminamos de generar el reporte «{reporte}» en formato {formato} "
+        "({filas} filas). Descárgalo desde el panel: {archivo}.",
+    ),
+    (EventoNotificacion.EXPORTACION.value, Idioma.EN.value): (
+        "Your «{reporte}» report is ready",
+        "The «{reporte}» report is ready in {formato} format ({filas} rows). "
+        "Download it from the dashboard: {archivo}.",
     ),
 }
 

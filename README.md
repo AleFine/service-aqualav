@@ -133,12 +133,13 @@ trae un valor por defecto que funciona, así que la API arranca sin tocar
 | `ALMACENAMIENTO_PROVEEDOR` | `simulado` | Almacén de objetos (`RF-027` el comprobante, `RF-023` las evidencias, `RF-006` la foto de perfil y `RF-009` la imagen del servicio). Ficheros locales bajo un directorio, con la clave —nunca una ruta— como contrato. Desde `INC-6` tiene puerta genérica: `POST /api/v1/archivos` y `GET /api/v1/archivos/{clave}`. |
 | `ALMACENAMIENTO_DIRECTORIO` | *(vacío)* | Dónde escribe el almacén. Vacío significa `aqualav-almacenamiento` dentro del directorio temporal del sistema: funciona en cualquier máquina recién clonada y no ensucia el repositorio. Pon una ruta para conservar los ficheros. |
 | `ARCHIVO_TAMANO_MAXIMO_KB` | `1024` | Tope de un objeto subido, en kilobytes. `RNF-004` M4 pide **1 MB** para las imágenes de `RF-023`; comprimirlas es del cliente móvil, y lo que hace el backend es **rechazar lo que pase del tope indicando el motivo** (`422 ARCHIVO_RECHAZADO`, flujo `3a`). |
-| `DOCUMENTOS_PROVEEDOR` | `simulado` | Generación de PDF (`RF-027`; `RF-034` después). `app/services/proveedores/documentos.py` escribe **un PDF 1.4 real a mano**: sin reportlab y sin ninguna dependencia nueva. |
+| `DOCUMENTOS_PROVEEDOR` | `simulado` | Generación de PDF (`RF-027` el comprobante y, desde `INC-8`, `RF-034` los reportes). `app/services/proveedores/documentos.py` escribe **un PDF 1.4 real a mano**: sin reportlab y sin ninguna dependencia nueva. `reporte(titulo, lineas)` rinde una página, así que un reporte largo imprime **los totales primero** y avisa cuántas filas dejó fuera; el CSV no tiene ese límite. |
 | `COMPROBANTE_SERIE` | `B001` | La serie de la numeración correlativa de `RF-027 CA-01`. |
 | `PAGO_EN_LINEA_VENTANA_MINUTOS` | `15` | `RF-014 2a`: cuánto se mantiene una reserva en «Pendiente de pago» antes de caducar. **El requisito dice quince literalmente**: la variable existe para acortarla en una demo, nunca para relajarla. |
 | `CUPON_CANJE_VIGENCIA_DIAS` | `30` | `RF-032`: cuánto dura el cupón que produce un canje de puntos. El requisito no pone número y un cupón que no vence nunca es un pasivo que el local no puede cerrar, así que treinta días es el valor por defecto que funciona. |
 | `PLANIFICADOR_HABILITADO` | `true` | El bucle de fondo que barre los recordatorios de `RF-030`, **caduca los pagos en línea vencidos** (`RF-014 2a`) y promueve la cola de espera de `RF-020`. Apagarlo no es un modo degradado: el mismo barrido es una función pura invocable por `POST /api/v1/interno/planificador`. **La suite lo apaga** (`tests/conftest.py`) para que ninguna prueba dependa del reloj real. |
 | `PLANIFICADOR_INTERVALO_SEGUNDOS` | `300` | Cada cuánto barre el bucle de fondo. |
+| `REPORTE_UMBRAL_FILAS` | `500` | `RF-034 4a`: a partir de cuántas filas una exportación deja de resolverse en la petición y pasa al planificador (respuesta **202**, archivo y aviso después). «Volumen elevado» es una decisión del local, no una ley, así que es configuración. |
 
 **Tarjetas de prueba de la pasarela simulada.** El resultado lo decide el
 prefijo, siempre igual y sin red:
@@ -345,7 +346,14 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 | `POST` | `/reservas/{id}/calificacion` | `calificacion:crear` | RF-031 `CA-01`, `CA-02`, `3b`, RN-10 | **201 / 200** · 403 · **422** |
 | `POST` | `/archivos` | `archivo:subir` | RF-006, RF-009, RF-023 | 201 · 403 · **422** |
 | `GET` | `/archivos/{clave}` | autenticado | RF-006, RF-009, RF-023 `CA-01` | 200 (binario) · 401 · **404** |
-| `POST` | `/interno/planificador` | `planificador:ejecutar` | RF-030, RF-020 `2a`, RF-014 `2a` | 200 · 401 · 403 |
+| `GET` | `/reportes/tablero?desde=&hasta=` | `reporte:leer` | RF-033 `CA-01`, `CA-02`, `2a`, `3a` | 200 · 403 · **422** |
+| `GET` | `/reportes/{tipo}?desde=&hasta=` | `reporte:leer` | RF-034 (`servicios`, `ingresos`, `productividad`, `ocupacion`) | 200 · 403 · **422** |
+| `POST` | `/reportes/exportaciones` | `reporte:leer` o `auditoria:leer` | RF-034 `CA-01`, `CA-02`, `2a`, `4a`; RF-036 «exportable» | **201 / 202** · 403 · **422** |
+| `GET` | `/reportes/exportaciones` | idem | RF-034 `4a` | 200 · 403 |
+| `GET` | `/reportes/exportaciones/{id}` | idem | RF-034 `4a` | 200 · **404** |
+| `GET` | `/reportes/exportaciones/{id}/archivo` | idem | RF-034 (CSV o PDF) | 200 (binario) · **409** · 404 |
+| `GET` | `/auditoria?desde=&hasta=&usuario_id=&accion=&entidad=&pagina=&tamanio=` | `auditoria:leer` | RF-036 `CA-01`, `3a`, RNF-014 | 200 · 403 · **422** |
+| `POST` | `/interno/planificador` | `planificador:ejecutar` | RF-030, RF-020 `2a`, RF-014 `2a`, RF-034 `4a` | 200 · 401 · 403 |
 | `GET` | `/api/v1/health` | público | RNF-010 | 200 |
 
 **La autorización es siempre por permiso, nunca por nombre de rol** (principio
@@ -522,16 +530,46 @@ destino que no existe en ningún enum.
 Cada cambio de estado escribe una fila en `reserva_estado_historial` con el
 estado, el autor y la marca de tiempo, y cada mutación del dominio (registro de
 usuario, alta de vehículo, cambio de precio, creación y cancelación de reserva,
-check-in, check-out, pago) escribe una fila en `evento_dominio`. Nada en el MVP
-**lee** esas tablas, y eso es intencional.
+check-in, check-out, pago, reembolso, calificación…) escribe una fila en
+`evento_dominio`. El MVP solo **escribía** esas tablas. Con la v1.0 se leen, y
+para lo que estaban:
 
-*Cómo crece a v1.0*: la línea de tiempo de `RF-022` ya se sirve del historial;
-los reportes de ocupación y facturación de v1.0 y las notificaciones de
-`RF-029` (v0.2) se alimentan del registro de eventos. Rellenar ese historial
-hacia atrás sería imposible: por eso se escribe desde el primer día. El puerto
-`Notificador` (`services/notificador.py`) ya está conectado en los servicios de
-reserva y operación; v0.2 solo registra una segunda implementación que empuja
-por push.
+- `INC-6` lee `reserva.calificacion_habilitada` para contar los siete días de
+  `RN-10`: cuándo se abrió la ventana no se puede reconstruir después.
+- `INC-8` lo lee dos veces más. La **productividad por operario** de `RF-034`
+  sale de ese mismo evento, porque la entrega borra `asignacion_servicio` y ahí
+  queda el único rastro de quién trabajó el servicio. Y sobre todo, **la
+  bitácora de `RF-036` ES `evento_dominio`**, no una tabla nueva.
+
+#### La bitácora de auditoría (`RF-036`, `RNF-014`)
+
+`GET /api/v1/auditoria` es una **vista** sobre dos tablas que ya se escribían:
+`evento_dominio` (desde el MVP) unida a `intento_login` (desde `INC-3`, que
+registra cada intento de sesión con su código de error y nunca la contraseña).
+`evento_dominio` gana en `INC-8` dos columnas, `valor_anterior` y
+`valor_nuevo`, y tres índices para los filtros del requisito.
+
+No hay tabla `bitacora_auditoria`, y la razón es el flujo `2a`: *«si falla el
+registro de auditoría, la operación principal se revierte»*. Como la fila se
+escribe **dentro de la transacción del negocio**, eso deja de ser una
+compensación que alguien tenga que programar y pasa a ser una propiedad del
+camino de escritura: `eventos.registrar_evento` revierte la unidad de trabajo y
+lanza `500 AUDITORIA_NO_REGISTRADA`, así que el `commit()` del servicio nunca
+llega a ejecutarse. Una segunda tabla escrita después solo podría ser «mejor
+esfuerzo». Además, una copia de un registro de solo-inserción es un registro
+que puede acabar contradiciéndose consigo mismo.
+
+**Solo inserción** (`CA-02`, `RNF-014`): `app/repositories/evento.py` expone
+`crear` y tres lectores, y ningún módulo de `app/` hace `UPDATE` ni `DELETE`
+sobre esas tablas. El router de la bitácora declara **únicamente `GET`**, de
+modo que un `PUT` sobre la colección responde 405 («se deniega») y sobre un
+registro concreto 404 («no existe»): las dos mitades del `CA-02` sin una sola
+línea que las imponga. `tests/test_auditoria.py` recorre el paquete con `ast`
+para que se note si alguien lo rompe, igual que `test_rbac` vigila `P5` y
+`test_operacion` vigila `P3`.
+
+Ni contraseñas, ni tokens, ni tarjetas: ningún llamante las escribe, y el
+servicio además **redacta** cualquier clave que lo parezca al salir.
 
 ### P6 — Idempotencia y precios históricos
 

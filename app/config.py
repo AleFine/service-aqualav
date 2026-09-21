@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     # liability the shop cannot close, so thirty days is the working default.
     cupon_canje_vigencia_dias: int = 30
 
+    # RF-034 flow 4a: "volumen elevado -> exportacion asincrona". How many
+    # rows count as high volume. It is a setting because "elevado" is a shop
+    # decision, not a law, and because the suite needs to reach the
+    # asynchronous path without inventing five hundred services.
+    reporte_umbral_filas: int = 500
+
     # RF-030 / plan section 4: the background sweep. It ships ON because a
     # reminder nobody runs is not a reminder, and it is switchable because the
     # sweep is always reachable through ``POST /interno/planificador`` - which
