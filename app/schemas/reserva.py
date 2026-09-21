@@ -4,9 +4,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.enums import EstadoPago, ModalidadPago
 from app.schemas.bahia import BahiaResumen
 from app.schemas.common import Dinero, nombre_de_autor
-from app.schemas.pago import PagoOut
+from app.schemas.pago import ComprobanteOut, PagoOut
 from app.schemas.servicio import ServicioResumen
 from app.schemas.tarifa import DesgloseOut
 from app.schemas.usuario import ClienteResumen
@@ -57,6 +58,11 @@ class ReservaCrear(BaseModel):
     inicio: datetime
     adicionales: list[int] = Field(default_factory=list)
     cupon: str | None = Field(default=None, max_length=30)
+    #: RF-025 / RN-08. ``presencial`` is the default because it is what the MVP
+    #: did and what a customer who says nothing means: pay at the shop. Choosing
+    #: ``en_linea`` is what makes the booking be born waiting for the money and
+    #: expire in fifteen minutes (RF-014 flow 2a).
+    modalidad_pago: ModalidadPago = ModalidadPago.PRESENCIAL
 
 
 class CancelacionIn(BaseModel):
@@ -130,6 +136,13 @@ class ReservaOut(BaseModel):
     creada_en: datetime
     monto: Dinero
     modalidad_pago: str
+    #: RF-025 CA-01: "su estado de pago es Pendiente". Derived from the
+    #: payments of the reservation, never stored: two places holding the same
+    #: fact is how they start disagreeing.
+    estado_pago: EstadoPago = EstadoPago.PENDIENTE
+    #: RF-014 flow 2a: when an unpaid online booking stops holding its block.
+    #: ``None`` once it is paid, cancelled or was never online to begin with.
+    expira_en: datetime | None = None
     # RF-019 v1.0: the token the reception ticket's QR encodes. Only a caller
     # holding ``reserva:leer_todas`` needs it - it is a scanning credential.
     codigo_qr: str | None = None
@@ -168,5 +181,10 @@ class ReservaOut(BaseModel):
     # RF-012: why ``monto`` is what it is, frozen when the reservation was
     # created. Absent only on rows created before INC-2.
     tarifa: DesgloseOut | None = None
-    # Only present on the cancellation response (always zero in the MVP).
+    #: RF-027 CA-02: the receipt of the service, once there is one.
+    comprobante: ComprobanteOut | None = None
+    #: RN-05: what the shop kept when the cancellation came in late. Present on
+    #: the cancellation response and on every read of a cancelled reservation,
+    #: which is what makes the "resumen de la cancelación" of RF-016 step 3
+    #: something the customer can look at again.
     penalidad: Dinero | None = None

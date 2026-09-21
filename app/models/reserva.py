@@ -23,7 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.models.asignacion import AsignacionServicio, ColaEspera
     from app.models.bahia import Bahia
     from app.models.notificacion import Recordatorio
-    from app.models.pago import Pago
+    from app.models.pago import Comprobante, Pago
     from app.models.servicio import Servicio
     from app.models.tarifa import ReservaAdicional, ReservaTarifaDesglose
     from app.models.usuario import Usuario
@@ -64,12 +64,26 @@ class Reserva(Base):
         default=MONEDA_PREDETERMINADA,
         server_default=MONEDA_PREDETERMINADA,
     )
-    # EXTENSION POINT: v0.3 adds "en_linea".
+    #: RF-025 / RN-08: "en línea al reservar" or "presencial al entregar". It
+    #: is what decides the state a reservation is BORN in (RF-014 flow 2a), and
+    #: the customer may still change it while the payment is not confirmed
+    #: (RF-025 flow 4a).
     modalidad_pago: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
         default=ModalidadPago.PRESENCIAL.value,
         server_default=ModalidadPago.PRESENCIAL.value,
+    )
+    #: RF-014 flow 2a: an online booking holds its block for FIFTEEN MINUTES
+    #: and then goes away. Stored rather than derived from ``creada_en`` so the
+    #: scheduler's sweep is one indexed comparison and so extending the window
+    #: for one booking (a demo, a support call) does not need a code change.
+    #: NULL on a reservation that was born confirmed - nothing to expire.
+    expira_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: RN-05: what the shop keeps when the cancellation came in late. Written
+    #: by the cancellation, zero when it came more than two hours ahead.
+    penalidad_centimos: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
     motivo_cancelacion: Mapped[str | None] = mapped_column(String(300), nullable=True)
     cancelada_por_id: Mapped[int | None] = mapped_column(
@@ -134,6 +148,16 @@ class Reserva(Base):
         back_populates="reserva",
         cascade="all, delete-orphan",
         order_by="Pago.registrado_en",
+        lazy="selectin",
+    )
+    #: RF-027: the receipts issued for this service. A list rather than a
+    #: single row because a reservation may be charged more than once (a
+    #: difference settled at the counter) and each charge gets its own number.
+    comprobantes: Mapped[list["Comprobante"]] = relationship(
+        "Comprobante",
+        back_populates="reserva",
+        cascade="all, delete-orphan",
+        order_by="Comprobante.id",
         lazy="selectin",
     )
     asignacion: Mapped[Optional["AsignacionServicio"]] = relationship(

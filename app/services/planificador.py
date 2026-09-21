@@ -11,11 +11,17 @@ Two shapes of the same work:
   test suite turns it off explicitly, so nothing in the suite ever depends on
   wall-clock time.
 
-It does two things per sweep:
+It does three things per sweep:
 
 1. **Reminders (RF-030)** for the reservations starting within the next two
    hours.
-2. **Promotes the waiting queue (RF-020 flow 2a)**, which INC-1B left as an
+2. **Expires unpaid online bookings (RF-014 flow 2a)**, the fifteen minute
+   window INC-4 opened. The block goes back on sale by running the ORDINARY
+   cancellation - same transition, same event, same notice - on behalf of the
+   customer who made the booking, so nothing about it is a special case and
+   RN-05 decides the penalty exactly as it would if they had cancelled by
+   hand (at that point the service is still hours away, so it is zero).
+3. **Promotes the waiting queue (RF-020 flow 2a)**, which INC-1B left as an
    explicit opening: until now a queued vehicle only got its bay when the
    receptionist retried ``POST /reservas/{id}/asignacion`` by hand. The
    promotion runs ON BEHALF of whoever queued it - the author is read back from
@@ -44,9 +50,18 @@ from app.repositories import reserva as reserva_repo
 from app.repositories import transicion as transicion_repo
 from app.repositories import usuario as usuario_repo
 from app.schemas import AsignacionIn
-from app.services import asignacion_service, eventos, recordatorio_service
+from app.services import (
+    asignacion_service,
+    eventos,
+    operacion_service,
+    recordatorio_service,
+    reserva_service,
+)
 
 logger = logging.getLogger("aqualav.planificador")
+
+#: RF-014 flow 2a: what the customer reads on a booking the timer cancelled.
+MOTIVO_EXPIRACION = "Venció el plazo de 15 minutos para completar el pago en línea de la reserva."
 
 
 @dataclass
@@ -56,6 +71,8 @@ class ResultadoPlanificador:
     momento: datetime
     recordatorios: list[Recordatorio] = field(default_factory=list)
     promovidas: list[int] = field(default_factory=list)
+    #: RF-014 flow 2a: ids of the bookings whose payment window ran out.
+    expiradas: list[int] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -73,6 +90,57 @@ def _recordar(db: Session, momento: datetime, **proveedores) -> list[Recordatori
             enviados.append(fila)
 
     return enviados
+
+
+# --------------------------------------------------------------------------
+# RF-014 flow 2a: the fifteen minute payment window
+# --------------------------------------------------------------------------
+def _caducar_pagos(db: Session, momento: datetime, **proveedores) -> list[int]:
+    """Cancel the online bookings whose payment window closed.
+
+    WHICH states are still waiting for the money is read from
+    ``transicion_estado`` - the states the payment operation owns a move out of
+    - so this sweep names no state (P3) and a waiting state added as data is
+    swept by itself.
+
+    The cancellation runs as the CUSTOMER who booked it: they hold
+    ``reserva:cancelar``, it is their reservation, and the history shows who
+    the booking belonged to instead of a system account with rights nobody
+    granted. Same reasoning as ``_autor_de_la_cola`` right below.
+    """
+    esperando = transicion_repo.listar_estados_con_endpoint(db, operacion_service.ENDPOINT_PAGO)
+    expiradas: list[int] = []
+
+    for reserva in reserva_repo.listar_expiradas(db, momento, esperando):
+        autor = reserva.usuario
+        if autor is None:  # pragma: no cover - a reservation always has an owner
+            continue
+        try:
+            reserva_service.cancelar(
+                db,
+                reserva,
+                MOTIVO_EXPIRACION,
+                autor,
+                autor.rol.codigos_permisos,
+                **proveedores,
+            )
+        except AppError as error:
+            # Somebody got there first, or the table no longer declares the
+            # move. Either way the sweep is not the place to argue about it.
+            logger.info("reserva no caducada reserva=%s motivo=%s", reserva.id, error.codigo)
+            continue
+
+        eventos.registrar_evento(
+            db,
+            eventos.ENTIDAD_RESERVA,
+            reserva.id,
+            eventos.RESERVA_PAGO_EXPIRADO,
+            autor_id=autor.id,
+            datos={"codigo": reserva.codigo, "expiro_en": momento.isoformat()},
+        )
+        expiradas.append(reserva.id)
+
+    return expiradas
 
 
 # --------------------------------------------------------------------------
@@ -149,11 +217,17 @@ def ejecutar_pendientes(
     momento = momento or ahora_utc()
 
     recordatorios = _recordar(db, momento, **proveedores)
+    # Before the queue: an expired booking frees a bay, and the promotion that
+    # follows can hand it to whoever is waiting in the very same sweep.
+    expiradas = _caducar_pagos(db, momento, **proveedores)
     promovidas = _promover_cola(db, **proveedores)
 
     db.commit()
     return ResultadoPlanificador(
-        momento=momento, recordatorios=recordatorios, promovidas=promovidas
+        momento=momento,
+        recordatorios=recordatorios,
+        promovidas=promovidas,
+        expiradas=expiradas,
     )
 
 
@@ -178,10 +252,11 @@ async def _bucle() -> None:  # pragma: no cover - exercised by running the API
         except Exception as error:  # noqa: BLE001 - the loop must survive anything
             logger.warning("El barrido del planificador falló: %s", error)
             continue
-        if resultado.recordatorios or resultado.promovidas:
+        if resultado.recordatorios or resultado.promovidas or resultado.expiradas:
             logger.info(
-                "barrido: %s recordatorio(s), %s reserva(s) promovida(s)",
+                "barrido: %s recordatorio(s), %s caducada(s), %s reserva(s) promovida(s)",
                 len(resultado.recordatorios),
+                len(resultado.expiradas),
                 len(resultado.promovidas),
             )
 

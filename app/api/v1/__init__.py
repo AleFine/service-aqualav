@@ -20,6 +20,7 @@ from app.api.v1 import (
     operacion,
     pagos,
     perfil,
+    reembolsos,
     reservas,
     servicios,
     vehiculos,
@@ -49,6 +50,9 @@ api_router.include_router(interno.router)
 api_router.include_router(operacion.router)
 api_router.include_router(asignacion.router)
 api_router.include_router(pagos.router)
+# RF-027 CA-02: the receipt PDF hangs off the receipt, not off the reservation.
+api_router.include_router(pagos.comprobantes)
+api_router.include_router(reembolsos.router)
 api_router.include_router(reservas.router)
 
 __all__ = ["api_router"]

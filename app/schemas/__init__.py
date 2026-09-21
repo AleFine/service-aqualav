@@ -58,7 +58,15 @@ from app.schemas.notificacion import (
     RecordatorioRespuestaIn,
     RespuestaRecordatorioOut,
 )
-from app.schemas.pago import PagoCrear, PagoOut
+from app.schemas.pago import (
+    ComprobanteOut,
+    ModalidadPagoIn,
+    PagoCrear,
+    PagoEnLineaCrear,
+    PagoOut,
+    ReembolsoCrear,
+    ReembolsoOut,
+)
 from app.schemas.reserva import (
     AtencionInmediataIn,
     CambioEstadoIn,
@@ -139,6 +147,7 @@ __all__ = [
     "CheckOutIn",
     "ClienteResumen",
     "ColaEsperaOut",
+    "ComprobanteOut",
     "ContenidoError",
     "DesgloseOut",
     "DetalleError",
@@ -159,9 +168,11 @@ __all__ = [
     "LoginIn",
     "LogoutIn",
     "MensajeOut",
+    "ModalidadPagoIn",
     "NotificacionOut",
     "Pagina",
     "PagoCrear",
+    "PagoEnLineaCrear",
     "PagoOut",
     "PaqueteActualizar",
     "PaqueteIn",
@@ -179,6 +190,8 @@ __all__ = [
     "RecordatorioOut",
     "RecordatorioRespuestaIn",
     "RecuperacionIn",
+    "ReembolsoCrear",
+    "ReembolsoOut",
     "ReenvioVerificacionIn",
     "RefreshIn",
     "RegistroIn",

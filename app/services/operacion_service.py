@@ -57,6 +57,10 @@ ENDPOINT_ASIGNACION = "asignacion"
 #: RF-024 flow 3a: the customer objected to the result. It owns its own move so
 #: the check-out never has two destinations to choose from.
 ENDPOINT_REVISION = "revision"
+#: RF-026: the online charge. It owns the move out of "waiting for the money",
+#: which is why no generic caller can confirm a reservation that was never
+#: paid. INC-4 implements the operation; INC-1A already wrote the row.
+ENDPOINT_PAGO = "pago"
 
 
 def transiciones_permitidas(db: Session, reserva: Reserva, permisos: list[str]) -> list[str]:

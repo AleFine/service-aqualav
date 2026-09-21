@@ -386,6 +386,73 @@ class IdempotencyKeyRequerida(AppError):
     )
 
 
+class PasarelaNoDisponible(AppError):
+    """RF-025 flow 3a / CA-02: the gateway is down, so the counter takes over.
+
+    A 503 and not a 422: nothing about the request is wrong, the other side is
+    simply not answering. The message carries the alternative the requirement
+    demands - keep the booking and pay at the shop - and the reservation is
+    left exactly as it was, so switching the modality is one call away.
+    """
+
+    codigo = "PASARELA_NO_DISPONIBLE"
+    http_status = 503
+    mensaje = (
+        "La pasarela de pagos no está disponible en este momento. "
+        "Puedes continuar con pago presencial y pagar en el local al entregar el vehículo."
+    )
+
+
+class PagoRechazado(AppError):
+    """RF-026 flow 3a: the gateway said no, and it said why.
+
+    The rejection is a RECORDED payment (``rechazado``), not a hole in the
+    log: the customer retries with another means and the shop can see how many
+    attempts it took.
+    """
+
+    codigo = "PAGO_RECHAZADO"
+    http_status = 422
+    mensaje = "La pasarela rechazó el pago. Revisa el motivo e inténtalo con otro medio de pago."
+
+
+class ModalidadDePagoNoModificable(AppError):
+    """RF-025 flow 4a read backwards: the money is already in.
+
+    The change is offered "mientras el pago no esté confirmado"; once it is,
+    what the customer wants is a refund (RF-028), not a different modality.
+    """
+
+    codigo = "MODALIDAD_NO_MODIFICABLE"
+    http_status = 422
+    mensaje = (
+        "El pago de esta reserva ya está confirmado, así que la modalidad no puede cambiarse. "
+        "Si necesitas revertirlo, solicita un reembolso."
+    )
+
+
+class MontoMayorAlPagado(AppError):
+    """RF-028 CA-02 / flow 2a: you cannot give back more than you took."""
+
+    codigo = "MONTO_MAYOR_AL_PAGADO"
+    http_status = 422
+    mensaje = (
+        "El monto a reembolsar supera el saldo disponible del pago. "
+        "Ajusta el monto al saldo pendiente e inténtalo de nuevo."
+    )
+
+
+class ComprobanteNoDisponible(AppError):
+    """RF-027: there is no receipt because there is no confirmed payment yet."""
+
+    codigo = "COMPROBANTE_NO_DISPONIBLE"
+    http_status = 404
+    mensaje = (
+        "Todavía no hay un comprobante para esta reserva. "
+        "Se emite en cuanto el pago queda confirmado."
+    )
+
+
 # --------------------------------------------------------------------------
 # Generic
 # --------------------------------------------------------------------------
@@ -447,6 +514,11 @@ ERRORES_POR_CODIGO: dict[str, type[AppError]] = {
         AdicionalNoDisponible,
         PagoPendiente,
         IdempotencyKeyRequerida,
+        PasarelaNoDisponible,
+        PagoRechazado,
+        ModalidadDePagoNoModificable,
+        MontoMayorAlPagado,
+        ComprobanteNoDisponible,
         RecursoNoEncontrado,
         ErrorDeValidacion,
         DatosInvalidos,

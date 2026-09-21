@@ -49,3 +49,19 @@ def listar_estados_no_terminales(db: Session) -> set[str]:
     """
     consulta = select(TransicionEstado.estado_origen).distinct()
     return set(db.scalars(consulta).all())
+
+
+def listar_estados_con_endpoint(db: Session, endpoint: str) -> set[str]:
+    """States out of which ``endpoint`` still owns a declared move (P3).
+
+    It is how a sweep asks "which reservations is this operation still pending
+    on?" without naming a single state: the fifteen minute expiry of RF-014
+    flow 2a looks for the states the PAYMENT operation leaves from, so a shop
+    that inserts another waiting state as data gets it swept too.
+    """
+    consulta = (
+        select(TransicionEstado.estado_origen)
+        .where(TransicionEstado.endpoint == endpoint)
+        .distinct()
+    )
+    return set(db.scalars(consulta).all())

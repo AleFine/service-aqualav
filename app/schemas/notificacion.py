@@ -85,3 +85,5 @@ class PlanificadorOut(BaseModel):
     momento: datetime
     recordatorios_enviados: int
     reservas_promovidas: list[int] = Field(default_factory=list)
+    #: RF-014 flow 2a: the online bookings whose fifteen minutes ran out.
+    reservas_expiradas: list[int] = Field(default_factory=list)

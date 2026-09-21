@@ -127,8 +127,32 @@ trae un valor por defecto que funciona, así que la API arranca sin tocar
 |---|---|---|
 | `CORREO_PROVEEDOR` | `simulado` | Envío de correo (`RF-035`: la contraseña temporal; `RF-001`/`RF-003`/`RF-006`: verificación y recuperación). `app/services/proveedores/correo.py` registra el mensaje en el log y lo guarda en memoria para poder leerlo en una demo o en una prueba, y desde `INC-5` **persiste el envío en `notificacion`** cuando el despachador de `RF-029` lo construye ligado a la fila. Un valor desconocido cae en la simulación a propósito. |
 | `PUSH_PROVEEDOR` | `simulado` | Envío de push (`RF-029`, `RF-030`, `RF-022 4a`). `app/services/proveedores/push.py` sigue el mismo patrón y **rechaza de forma determinista un token que no esté en `dispositivo`**, que es lo que ejercita los reintentos sin red. |
-| `PLANIFICADOR_HABILITADO` | `true` | El bucle de fondo que barre los recordatorios de `RF-030` y promueve la cola de espera de `RF-020`. Apagarlo no es un modo degradado: el mismo barrido es una función pura invocable por `POST /api/v1/interno/planificador`. **La suite lo apaga** (`tests/conftest.py`) para que ninguna prueba dependa del reloj real. |
+| `PASARELA_PROVEEDOR` | `simulado` | Cobro y reversión por pasarela (`RF-025`, `RF-026`, `RF-028`). `app/services/proveedores/pasarela.py` es **determinista por número de tarjeta de prueba** y su libro mayor es `transaccion_pasarela`, así que `consultar(clave)` devuelve siempre lo mismo para la misma clave de idempotencia —que es lo que prueba `RF-026 3b`—. |
+| `PASARELA_DISPONIBLE` | `true` | No hay una pasarela real que caerse, así que la caída es un interruptor. Apagarlo es la forma de ver el flujo `3a` de `RF-025`: la reserva se conserva y se **ofrece continuar con pago presencial** (`503 PASARELA_NO_DISPONIBLE`). |
+| `PASARELA_NOMBRE` | `simulada` | Lo que se guarda en `pago.pasarela`, que es a quién hay que pedirle la reversión. |
+| `ALMACENAMIENTO_PROVEEDOR` | `simulado` | Almacén de objetos (`RF-027` hoy; `RF-023` y las fotos de perfil, después). Ficheros locales bajo un directorio, con la clave —nunca una ruta— como contrato. |
+| `ALMACENAMIENTO_DIRECTORIO` | *(vacío)* | Dónde escribe el almacén. Vacío significa `aqualav-almacenamiento` dentro del directorio temporal del sistema: funciona en cualquier máquina recién clonada y no ensucia el repositorio. Pon una ruta para conservar los ficheros. |
+| `DOCUMENTOS_PROVEEDOR` | `simulado` | Generación de PDF (`RF-027`; `RF-034` después). `app/services/proveedores/documentos.py` escribe **un PDF 1.4 real a mano**: sin reportlab y sin ninguna dependencia nueva. |
+| `COMPROBANTE_SERIE` | `B001` | La serie de la numeración correlativa de `RF-027 CA-01`. |
+| `PAGO_EN_LINEA_VENTANA_MINUTOS` | `15` | `RF-014 2a`: cuánto se mantiene una reserva en «Pendiente de pago» antes de caducar. **El requisito dice quince literalmente**: la variable existe para acortarla en una demo, nunca para relajarla. |
+| `PLANIFICADOR_HABILITADO` | `true` | El bucle de fondo que barre los recordatorios de `RF-030`, **caduca los pagos en línea vencidos** (`RF-014 2a`) y promueve la cola de espera de `RF-020`. Apagarlo no es un modo degradado: el mismo barrido es una función pura invocable por `POST /api/v1/interno/planificador`. **La suite lo apaga** (`tests/conftest.py`) para que ninguna prueba dependa del reloj real. |
 | `PLANIFICADOR_INTERVALO_SEGUNDOS` | `300` | Cada cuánto barre el bucle de fondo. |
+
+**Tarjetas de prueba de la pasarela simulada.** El resultado lo decide el
+prefijo, siempre igual y sin red:
+
+| Prefijo | Qué hace | Requisito |
+|---|---|---|
+| `4111…` | Aprueba el cobro y la reversión | `RF-026 CA-02` |
+| `4000…` | Rechaza el cobro por fondos insuficientes | `RF-026 3a` |
+| `4999…` | **Liquida el cobro y pierde la respuesta** | `RF-026 3b` |
+| `4555…` | Acepta el cobro sin liquidarlo (`pendiente`) | `RF-026` postcondición |
+| `4222…` | Aprueba el cobro y **rechaza la reversión** | `RF-028 3a` |
+
+El número de tarjeta **nunca se guarda** (`RNF-013` M3): el servicio lo
+convierte en un token `tok_<prefijo>_<huella>` en su primera línea y lo que
+viaja a partir de ahí —la fila del pago, el libro de la pasarela y el registro
+de eventos— es ese token.
 
 Y estas tres, que no seleccionan un proveedor sino que afinan reglas de
 `INC-3`:
@@ -295,12 +319,18 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 | `POST` | `/reservas/{id}/revision` | `reserva:revisar` | RF-024 `3a` | 200 · **422** |
 | `POST` | `/reservas/{id}/check-out` | `reserva:check_out` | RF-024 | 200 · **422** |
 | `POST` | `/reservas/{id}/pagos` | `pago:registrar` | RF-026 | **201 / 200** · 400 · 422 |
+| `POST` | `/reservas/{id}/pagos/en-linea` | `pago:en_linea` | RF-026 v1.0 `3a`, `3b` | 200 · 400 · **422** · **503** |
+| `POST` | `/reservas/{id}/modalidad-pago` | `pago:en_linea` | RF-025 `4a` | 200 · 404 · **422** |
+| `GET` | `/reservas/{id}/comprobante` | `reserva:leer_propias` o `reserva:leer_todas` | RF-027 | 200 · **404** |
+| `GET` | `/comprobantes/{id}/archivo` | idem | RF-027 `CA-02` | 200 (PDF) · 404 |
+| `POST` | `/pagos/{id}/reembolsos` | `pago:reembolsar` | RF-028 `CA-01`, `CA-02`, `3a` | **201 / 200** · 400 · **422** |
+| `GET` | `/pagos/{id}/reembolsos` | `pago:reembolsar` | RF-028 `3a` | 200 · 404 |
 | `POST` | `/reservas/{id}/recordatorio` | `reserva:leer_propias` o `reserva:leer_todas` | RF-030 | 200 · 403 · **404** · 422 |
 | `GET` | `/notificaciones?limite=` | autenticado | RF-029, RF-022 | 200 · 401 |
 | `GET` | `/notificaciones/dispositivos` | autenticado | RF-029 | 200 · 401 |
 | `POST` | `/notificaciones/dispositivos` | autenticado | RF-029 | 201 · 401 · 422 |
 | `DELETE` | `/notificaciones/dispositivos/{id}` | autenticado | RF-029 | 204 · **404** |
-| `POST` | `/interno/planificador` | `planificador:ejecutar` | RF-030, RF-020 `2a` | 200 · 401 · 403 |
+| `POST` | `/interno/planificador` | `planificador:ejecutar` | RF-030, RF-020 `2a`, RF-014 `2a` | 200 · 401 · 403 |
 | `GET` | `/api/v1/health` | público | RNF-010 | 200 |
 
 **La autorización es siempre por permiso, nunca por nombre de rol** (principio
@@ -356,8 +386,29 @@ sí mismo `rol:administrar` (`422 CAMBIO_DE_ROL_PROPIO`).
   cupones sí pueden convivir: los elige el cliente escribiéndolos. Una
   promoción vencida deja de aplicarse **sola**, porque la vigencia se compara
   con la fecha del servicio en cada cálculo; nadie la desactiva.
+- `RN-05` — cancelar con **más de dos horas** de anticipación no tiene
+  penalidad; con menos **se retiene el 20 %** del monto. Dos horas exactas ya
+  es tarde: «más de» se lee estricto. El porcentaje se calcula sobre
+  `reserva.monto_centimos`, que es el TOTAL del desglose congelado, así que se
+  retiene sobre lo que el cliente iba a pagar de verdad y no sobre un precio de
+  catálogo. La regla vive en un objeto inyectable (`politica_cancelacion.py`),
+  que es la razón por la que sustituirla no tocó ni una línea del flujo de
+  `RF-016`. Si el pago fue por pasarela, la cancelación **inicia el reembolso**
+  de lo pagado menos la penalidad; si la pasarela rechaza la reversión, la
+  solicitud queda `pendiente_manual` y la cancelación **no se revierte** (`5a`).
+- `RN-08` — el pago es **en línea al reservar** o **presencial al entregar**.
+  La modalidad decide dónde NACE la reserva: `en_linea` la deja en «Pendiente
+  de pago» con quince minutos de plazo (`RF-014 2a`, los barre el
+  planificador), `presencial` la confirma con el estado de pago «Pendiente»
+  (`RF-025 CA-01`). Se puede cambiar de modalidad **mientras el pago no esté
+  confirmado** (`4a`); después, lo que corresponde es un reembolso.
 - `RN-09` — no se entrega un vehículo sin servicio finalizado y pago confirmado.
+  Un pago reembolsado **parcialmente** sigue contando: el servicio se pagó, y lo
+  que se devolvió después es una reversión, no una falta de pago.
 - `RN-12` — soles con IGV incluido; el precio almacenado es el final.
+- `RNF-017` M1 — la **clave de idempotencia es obligatoria** en el cobro de
+  caja, en el cobro por pasarela y **también en los reembolsos**. Repetirla
+  responde `200` con la operación que ya existía, nunca una segunda.
 
 ---
 
@@ -466,16 +517,19 @@ app/
   repositories/            acceso a datos por agregado
   services/                auth · rol · usuario · vehiculo · servicio · bahia
                            disponibilidad · agenda · asignacion · reserva
-                           operacion · pago · tarifa · promocion · eventos
+                           operacion · pago · comprobante · reembolso
+                           tarifa · promocion · eventos
                            notificacion · recordatorio · seguimiento
                            planificador · notificador · politica_cancelacion
                            ensamblador
-                           proveedores/ (correo y push simulados)
+                           proveedores/ (correo, push, pasarela,
+                           almacenamiento y documentos simulados)
   api/v1/                  auth · vehiculos · servicios · catalogo
                            admin_servicios · admin_tarifas · admin_roles
                            admin_usuarios · admin_bahias · agenda
                            disponibilidad · reservas · operacion · asignacion
-                           pagos · estados · notificaciones · interno · health
+                           pagos · comprobantes · reembolsos · estados
+                           notificaciones · interno · health
   seed.py                  carga inicial idempotente
 migrations/                Alembic
 tests/                     pytest sobre SQLite en memoria

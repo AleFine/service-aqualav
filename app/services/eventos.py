@@ -18,6 +18,10 @@ ENTIDAD_VEHICULO = "vehiculo"
 ENTIDAD_SERVICIO = "servicio"
 ENTIDAD_RESERVA = "reserva"
 ENTIDAD_PAGO = "pago"
+#: RF-027 / RF-028. The receipt and the reversal are audited as entities of
+#: their own so RF-036 can filter by them without parsing a payment payload.
+ENTIDAD_COMPROBANTE = "comprobante"
+ENTIDAD_REEMBOLSO = "reembolso"
 ENTIDAD_BAHIA = "bahia"
 ENTIDAD_AGENDA = "agenda"
 ENTIDAD_PAQUETE = "paquete"
@@ -107,6 +111,32 @@ RESERVA_REPROGRAMACION_SOLICITADA = "reserva.reprogramacion_solicitada"
 #: without the counter having to retry the assignment by hand.
 RESERVA_PROMOVIDA_DE_COLA = "reserva.promovida_de_cola"
 PAGO_REGISTRADO = "pago.registrado"
+#: RF-026 v1.0: the online charge through the gateway, with the external
+#: identifier step 4 demands. The card number is NEVER part of ``datos``
+#: (RNF-013): only the token and the gateway's reference travel.
+PAGO_EN_LINEA_APROBADO = "pago.en_linea_aprobado"
+#: RF-026 flow 3a: the gateway said no, with its reason.
+PAGO_EN_LINEA_RECHAZADO = "pago.en_linea_rechazado"
+#: RF-026 postcondition: accepted but not settled yet.
+PAGO_EN_LINEA_PENDIENTE = "pago.en_linea_pendiente"
+#: RF-026 flow 3b: the reply never arrived and the state was asked for with the
+#: SAME idempotency key instead of charging again. This event is the proof.
+PAGO_EN_LINEA_CONSULTADO = "pago.en_linea_consultado"
+#: RF-025 flow 3a: the gateway was down and the presential alternative was
+#: offered. The reservation is untouched, which is the whole point.
+PAGO_PASARELA_NO_DISPONIBLE = "pago.pasarela_no_disponible"
+#: RF-025 flow 4a: the customer moved between online and counter payment.
+RESERVA_MODALIDAD_PAGO_CAMBIADA = "reserva.modalidad_pago_cambiada"
+#: RF-014 flow 2a: the fifteen minute window went by without payment.
+RESERVA_PAGO_EXPIRADO = "reserva.pago_expirado"
+#: RF-027: the receipt was numbered, rendered and stored - or it was not, and
+#: flow 1a says the administrator has to find out from somewhere.
+COMPROBANTE_EMITIDO = "comprobante.emitido"
+COMPROBANTE_NO_EMITIDO = "comprobante.no_emitido"
+#: RF-028: the reversal, and the one the gateway refused. A refused reversal is
+#: NOT an error swallowed somewhere - it is a row waiting for a human.
+REEMBOLSO_PROCESADO = "reembolso.procesado"
+REEMBOLSO_PENDIENTE_MANUAL = "reembolso.pendiente_manual"
 #: RF-018 / bay administration.
 BAHIA_CREADA = "bahia.creada"
 BAHIA_ACTUALIZADA = "bahia.actualizada"

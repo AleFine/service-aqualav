@@ -8,7 +8,9 @@ locking mechanism.
 """
 
 import os
+import tempfile
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "clave-solo-para-pruebas")
@@ -18,6 +20,13 @@ os.environ.setdefault("CORS_ORIGINS", "*")
 # sweep calls ``planificador.ejecutar_pendientes(db, momento=...)`` with the
 # instant it wants to pretend it is.
 os.environ.setdefault("PLANIFICADOR_HABILITADO", "false")
+# RF-027 / plan section 4: the simulated object store writes real files. The
+# suite points it at a directory of its own so the receipts of a test run
+# never land next to the ones a demo left behind, and never in the checkout.
+os.environ.setdefault(
+    "ALMACENAMIENTO_DIRECTORIO",
+    str(Path(tempfile.gettempdir()) / "aqualav-pruebas" / "almacenamiento"),
+)
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -220,15 +229,52 @@ def crear_vehiculo(api: TestClient, placa: str) -> int:
     return respuesta.json()["id"]
 
 
-def crear_reserva(api: TestClient, servicio_id: int, vehiculo_id: int, inicio: datetime):
-    """POST /reservas with an aware start time. Returns the raw response."""
+def crear_reserva(
+    api: TestClient,
+    servicio_id: int,
+    vehiculo_id: int,
+    inicio: datetime,
+    *,
+    modalidad_pago: str | None = None,
+):
+    """POST /reservas with an aware start time. Returns the raw response.
+
+    ``modalidad_pago`` is omitted by default so the request is byte for byte
+    the one the MVP sent: RF-025 makes ``presencial`` the default precisely so
+    a client that says nothing keeps working.
+    """
+    cuerpo = {
+        "servicio_id": servicio_id,
+        "vehiculo_id": vehiculo_id,
+        "inicio": inicio.isoformat(),
+    }
+    if modalidad_pago is not None:
+        cuerpo["modalidad_pago"] = modalidad_pago
+    return api.post(f"{RUTA}/reservas", json=cuerpo)
+
+
+#: Test cards of the simulated gateway (plan section 4). Spelled out here so
+#: every payment test reads as a scenario and not as a magic number.
+TARJETA_APROBADA = "4111111111111111"
+TARJETA_RECHAZADA = "4000000000000002"
+TARJETA_SIN_RESPUESTA = "4999999999999996"
+TARJETA_PENDIENTE = "4555555555555551"
+TARJETA_SIN_REVERSION = "4222222222222220"
+
+
+def pagar_en_linea(
+    api: TestClient,
+    reserva_id: int,
+    *,
+    tarjeta: str = TARJETA_APROBADA,
+    clave: str = "cobro-1",
+    medio: str = "tarjeta",
+):
+    """``POST /reservas/{id}/pagos/en-linea``: the gateway charge of RF-026."""
     return api.post(
-        f"{RUTA}/reservas",
-        json={
-            "servicio_id": servicio_id,
-            "vehiculo_id": vehiculo_id,
-            "inicio": inicio.isoformat(),
-        },
+        f"{RUTA}/reservas/{reserva_id}/pagos/en-linea",
+        json={"medio": medio, "numero_tarjeta": tarjeta},
+        headers={"Idempotency-Key": clave},
     )
 
 

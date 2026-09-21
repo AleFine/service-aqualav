@@ -68,7 +68,11 @@ PERMISOS: dict[str, str] = {
     "reserva:avanzar_estado": "Avanzar el estado de una reserva.",
     "reserva:revisar": "Registrar la observación del cliente y enviar el servicio a revisión.",
     "reserva:check_out": "Registrar la entrega del vehículo.",
-    "pago:registrar": "Registrar el pago de una reserva.",
+    "pago:registrar": "Registrar el pago presencial de una reserva.",
+    "pago:en_linea": (
+        "Elegir la modalidad de pago de una reserva propia y pagarla por la pasarela."
+    ),
+    "pago:reembolsar": "Anular o reembolsar un pago registrado.",
     "agenda:leer": "Consultar la agenda diaria y semanal por bahía.",
     "agenda:administrar": "Bloquear franjas, feriados y horarios de atención.",
     "usuario:administrar": "Crear, editar, activar y desactivar usuarios internos.",
@@ -105,6 +109,10 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
         "reserva:crear",
         "reserva:leer_propias",
         "reserva:cancelar",
+        # RF-025 / RF-026: paying online is something the CUSTOMER does, so
+        # the permission the transition ``pendiente_pago -> confirmada``
+        # demands has to be theirs. ``pago:registrar`` stays with the counter.
+        "pago:en_linea",
     ),
     # The counter: receives the vehicle, assigns it, charges it and hands it
     # back. It does NOT advance the service inside the bay.
@@ -124,6 +132,9 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
         "reserva:revisar",
         "reserva:check_out",
         "pago:registrar",
+        # The counter also takes a card at the till through the gateway, and
+        # settles the modality with the customer in front of them.
+        "pago:en_linea",
     ),
     # The bay: advances the service through its operative states (RF-021).
     # ``reserva:leer_todas`` is shared with the counter because an operator
@@ -160,12 +171,17 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
 #: least one of them, which is what makes the catalogue of ``GET /estados``
 #: complete without a list of states anywhere in the code.
 TRANSICIONES: tuple[tuple[str, str, str, str | None, bool, str | None], ...] = (
-    # 3. The gateway approves the online payment (RF-026). INC-4 implements the
-    #    owning operation; the row already refuses every other door.
+    # 3. The gateway approves the online payment (RF-026), or the customer
+    #    switches to paying at the shop (RF-025 flow 4a). INC-4 implements the
+    #    owning operation; the row already refused every other door.
+    #    ``pago:en_linea`` and not ``pago:registrar``: the person who completes
+    #    this move is the CUSTOMER, and giving them the counter's charging
+    #    permission to let them pay their own booking would be handing them the
+    #    till (P5).
     (
         EstadoReserva.PENDIENTE_PAGO.value,
         EstadoReserva.CONFIRMADA.value,
-        "pago:registrar",
+        "pago:en_linea",
         "pago",
         False,
         EventoNotificacion.CONFIRMACION.value,
@@ -347,6 +363,18 @@ CANALES_POR_EVENTO: dict[str, tuple[str, ...]] = {
         CanalNotificacion.EN_APP.value,
         CanalNotificacion.PUSH.value,
     ),
+    # RF-027: the receipt is "enviado por correo y publicado en la app". No
+    # push: nobody wants a phone buzzing to be handed an invoice.
+    EventoNotificacion.COMPROBANTE.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+    ),
+    # RF-028: "cliente notificado". Money going back is worth a push.
+    EventoNotificacion.REEMBOLSO.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+        CanalNotificacion.PUSH.value,
+    ),
     # Internal notices: they belong in the app, not in somebody's inbox.
     EventoNotificacion.ASIGNACION.value: (CanalNotificacion.EN_APP.value,),
     EventoNotificacion.ESTADO_CAMBIADO.value: (CanalNotificacion.EN_APP.value,),
@@ -425,6 +453,27 @@ TEXTOS: dict[tuple[str, str], tuple[str, str]] = {
         "New hand-over time for vehicle {placa}",
         "Your «{servicio}» service is running {minutos_retraso} minutes late. "
         "The new estimated hand-over time is {entrega}. Sorry for the delay.",
+    ),
+    (EventoNotificacion.COMPROBANTE.value, Idioma.ES.value): (
+        "Comprobante {numero} de tu reserva {codigo}",
+        "Hola {cliente}: adjuntamos el comprobante {numero} por {total} "
+        "({medio}) del servicio «{servicio}». También puedes descargarlo "
+        "cuando quieras desde la aplicación.",
+    ),
+    (EventoNotificacion.COMPROBANTE.value, Idioma.EN.value): (
+        "Receipt {numero} for booking {codigo}",
+        "Hi {cliente}: here is receipt {numero} for {total} ({medio}) covering "
+        "«{servicio}». You can also download it from the app at any time.",
+    ),
+    (EventoNotificacion.REEMBOLSO.value, Idioma.ES.value): (
+        "Reembolso de tu reserva {codigo}",
+        "Registramos un reembolso de {monto} por la reserva {codigo} "
+        "({motivo_reembolso}). Estado: {estado_reembolso}.",
+    ),
+    (EventoNotificacion.REEMBOLSO.value, Idioma.EN.value): (
+        "Refund for booking {codigo}",
+        "We registered a {monto} refund for booking {codigo} "
+        "({motivo_reembolso}). Status: {estado_reembolso}.",
     ),
     (EventoNotificacion.ASIGNACION.value, Idioma.ES.value): (
         "Tienes un servicio asignado en la {bahia}",
@@ -630,11 +679,17 @@ def _sembrar_roles(db: Session, permisos: dict[str, Permiso]) -> dict[str, Rol]:
 
 
 def _sembrar_transiciones(db: Session) -> None:
-    """Insert the declared moves, and keep their notification event in sync.
+    """Insert the declared moves, and keep the two data columns in sync.
 
-    The event is the only column the seed UPDATES on an existing row. It has to
-    be: a shop that upgraded from INC-1A has the fourteen moves already, and
-    without this they would all stay silent (RF-029).
+    ``evento_notificacion`` and ``permiso_requerido`` are the columns the seed
+    UPDATES on an existing row. They have to be: a shop that upgraded from
+    INC-1A has the fourteen moves already, and without the first they would all
+    stay silent (RF-029) while without the second the online payment of RF-026
+    would still be demanding the counter's charging permission.
+
+    ``endpoint`` and ``marca_fin_servicio`` are deliberately NOT refreshed: an
+    operator who edited them did so to change the machine, which is exactly
+    what P3 is for.
     """
     existentes = {
         (transicion.estado_origen, transicion.estado_destino): transicion
@@ -655,6 +710,7 @@ def _sembrar_transiciones(db: Session) -> None:
             )
         else:
             transicion.evento_notificacion = evento
+            transicion.permiso_requerido = permiso
     db.flush()
 
 

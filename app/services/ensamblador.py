@@ -9,9 +9,11 @@ from sqlalchemy.orm import Session
 
 from app.core.horario import a_lima, desde_bd
 from app.models import (
+    ESTADOS_PAGO_COBRADO,
     AsignacionServicio,
     Bahia,
     ColaEspera,
+    Comprobante,
     DiaNoLaborable,
     Dispositivo,
     EstadoPago,
@@ -22,6 +24,7 @@ from app.models import (
     Permiso,
     Promocion,
     Recordatorio,
+    Reembolso,
     Reserva,
     ReservaTarifaDesglose,
     Rol,
@@ -38,6 +41,7 @@ from app.schemas import (
     CancelacionOut,
     ClienteResumen,
     ColaEsperaOut,
+    ComprobanteOut,
     DesgloseOut,
     DiaNoLaborableOut,
     Dinero,
@@ -52,6 +56,7 @@ from app.schemas import (
     PromocionOut,
     PromocionResumen,
     RecordatorioOut,
+    ReembolsoOut,
     ReservaOut,
     ResultadoAsignacionOut,
     RolOut,
@@ -68,6 +73,9 @@ from app.services import (
     tarifa_service,
 )
 from app.services.tarifa_service import Desglose, PrecioAplicable
+
+#: Where the receipt PDFs are served from (RF-027 CA-02).
+RUTA_COMPROBANTES = "/api/v1/comprobantes"
 
 
 def _autor(usuario: Usuario | None) -> str | None:
@@ -358,19 +366,69 @@ def armar_pago(pago: Pago) -> PagoOut:
     return PagoOut(
         id=pago.id,
         monto=Dinero.de_centimos(pago.monto_centimos, pago.moneda),
+        saldo=Dinero.de_centimos(pago.saldo_centimos, pago.moneda),
         medio=pago.medio,
         estado=pago.estado,
         registrado_en=a_lima(desde_bd(pago.registrado_en)),
         autor=_autor(pago.autor),
+        referencia_externa=pago.referencia_externa,
+        pasarela=pago.pasarela,
+        motivo_rechazo=pago.motivo_rechazo,
+    )
+
+
+def armar_comprobante(comprobante: Comprobante) -> ComprobanteOut:
+    """RF-027: what the receipt says plus where the PDF is served from."""
+    return ComprobanteOut(
+        id=comprobante.id,
+        numero=comprobante.numero,
+        serie=comprobante.serie,
+        numero_correlativo=comprobante.numero_correlativo,
+        monto=Dinero.de_centimos(comprobante.monto_centimos, comprobante.moneda),
+        medio_pago=comprobante.medio_pago,
+        estado=comprobante.estado,
+        emitido_en=a_lima(desde_bd(comprobante.emitido_en)),
+        archivo_url=f"{RUTA_COMPROBANTES}/{comprobante.id}/archivo",
+    )
+
+
+def armar_reembolso(reembolso: Reembolso) -> ReembolsoOut:
+    """RF-028: the reversal, including the one still waiting for a human."""
+    return ReembolsoOut(
+        id=reembolso.id,
+        pago_id=reembolso.pago_id,
+        tipo=reembolso.tipo,
+        monto=Dinero.de_centimos(reembolso.monto_centimos, reembolso.moneda),
+        motivo=reembolso.motivo,
+        estado=reembolso.estado,
+        referencia_externa=reembolso.referencia_externa,
+        detalle=reembolso.detalle,
+        registrado_en=a_lima(desde_bd(reembolso.registrado_en)),
+        autor=_autor(reembolso.autor),
     )
 
 
 def _pago_visible(reserva: Reserva) -> Pago | None:
-    """The confirmed payment, or the last one registered if none is confirmed."""
+    """The payment that describes the reservation, or the last attempt.
+
+    A collected payment wins over a rejected or unsettled one, because that is
+    what "el pago de la reserva" means to everyone who reads the screen. When
+    nothing was collected the LAST attempt is shown, rejection reason included,
+    which is what RF-026 flow 3a needs the customer to see.
+    """
     if not reserva.pagos:
         return None
-    confirmados = [pago for pago in reserva.pagos if pago.estado == EstadoPago.CONFIRMADO.value]
-    return (confirmados or list(reserva.pagos))[-1]
+    cobrados = [pago for pago in reserva.pagos if pago.estado in ESTADOS_PAGO_COBRADO]
+    return (cobrados or list(reserva.pagos))[-1]
+
+
+def _estado_de_pago(pago: Pago | None) -> str:
+    """RF-025 CA-01: "su estado de pago es Pendiente" until it is not.
+
+    Derived, never stored. A reservation with no payment - which is exactly
+    what choosing ``presencial`` leaves behind - reads ``pendiente``.
+    """
+    return pago.estado if pago is not None else EstadoPago.PENDIENTE.value
 
 
 def armar_reserva(
@@ -390,6 +448,7 @@ def armar_reserva(
         )
 
     pago = _pago_visible(reserva)
+    comprobante = reserva.comprobantes[-1] if reserva.comprobantes else None
     # RF-022: read, never recalculated. The estimate is written where something
     # changed (``seguimiento_service.actualizar_estimado``), so a GET never
     # moves it and never notifies anybody.
@@ -404,6 +463,8 @@ def armar_reserva(
         creada_en=a_lima(desde_bd(reserva.creada_en)),
         monto=Dinero.de_centimos(reserva.monto_centimos, reserva.moneda),
         modalidad_pago=reserva.modalidad_pago,
+        estado_pago=_estado_de_pago(pago),
+        expira_en=(a_lima(desde_bd(reserva.expira_en)) if reserva.expira_en is not None else None),
         # The QR is a scanning credential for the counter, so it follows the
         # same horizontal rule as ``observaciones_ingreso``.
         codigo_qr=(reserva.codigo_qr if reserva_service.puede_ver_todas(permisos) else None),
@@ -428,6 +489,7 @@ def armar_reserva(
         observacion_revision=reserva.observacion_revision,
         cancelacion=cancelacion,
         pago=armar_pago(pago) if pago is not None else None,
+        comprobante=armar_comprobante(comprobante) if comprobante is not None else None,
         tarifa=(
             armar_desglose_guardado(reserva.tarifa, reserva) if reserva.tarifa is not None else None
         ),
@@ -439,7 +501,17 @@ def armar_reserva(
             )
             for fila in reserva.historial
         ],
-        penalidad=penalidad,
+        # RN-05: the response of the cancellation carries the freshly computed
+        # penalty; every other read shows what was actually kept.
+        penalidad=(
+            penalidad
+            if penalidad is not None
+            else (
+                Dinero.de_centimos(reserva.penalidad_centimos, reserva.moneda)
+                if reserva.penalidad_centimos
+                else None
+            )
+        ),
     )
 
 

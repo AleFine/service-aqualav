@@ -20,8 +20,16 @@ from app.core.errors import (
     detalle,
 )
 from app.core.horario import a_lima, a_utc, ahora, ahora_utc, dentro_de_horario, desde_bd
-from app.models import EstadoReserva, EventoNotificacion, ModalidadPago, Reserva, Usuario
+from app.models import (
+    EstadoReserva,
+    EventoNotificacion,
+    ModalidadPago,
+    Reserva,
+    TipoReembolso,
+    Usuario,
+)
 from app.repositories import bahia as bahia_repo
+from app.repositories import pago as pago_repo
 from app.repositories import reserva as reserva_repo
 from app.repositories import transicion as transicion_repo
 from app.repositories import vehiculo as vehiculo_repo
@@ -38,6 +46,8 @@ from app.services import (
     eventos,
     notificacion_service,
     operacion_service,
+    pago_service,
+    reembolso_service,
     servicio_service,
     tarifa_service,
 )
@@ -50,6 +60,10 @@ PERMISO_LEER_TODAS = "reserva:leer_todas"
 
 #: How many times to retry on a reservation code collision before giving up.
 INTENTOS_CODIGO = 5
+
+#: RF-016 flow 5a / RN-05: the reason written on the refund a cancellation
+#: starts. It is user facing, because the customer sees it in their history.
+MOTIVO_REEMBOLSO_CANCELACION = "Cancelación de la reserva {codigo} (RN-05)."
 
 
 def _generar_codigo(db: Session) -> str:
@@ -187,6 +201,18 @@ def crear(
             or [detalle("inicio", "No quedan bloques libres ese día. Prueba con otra fecha.")]
         )
 
+    # RF-014 flow 2a + RF-025: the modality decides where the booking is BORN.
+    # This is the one edge of Annex A that is not a row in
+    # ``transicion_estado`` - there is no origin state to look the move up by -
+    # so it is also the only place in the service layer where a state is
+    # written down, and it is written from the modality, not from a branch on
+    # some other state.
+    en_linea = datos.modalidad_pago == ModalidadPago.EN_LINEA
+    estado_inicial = (
+        EstadoReserva.PENDIENTE_PAGO.value if en_linea else EstadoReserva.CONFIRMADA.value
+    )
+    creada_en = ahora_utc()
+
     reserva = reserva_repo.crear(
         db,
         codigo=_generar_codigo(db),
@@ -197,17 +223,17 @@ def crear(
         bahia_id=libre.id,
         inicio=inicio_utc,
         fin=fin_utc,
-        # CREATION, the one edge of Annex A that is not a row in
-        # ``transicion_estado``: there is no origin state to look the move up
-        # by. A presential booking is born confirmed (transition 2); INC-4 adds
-        # the online branch, which is born ``pendiente_pago`` (transition 1).
-        estado=EstadoReserva.CONFIRMADA.value,
+        estado=estado_inicial,
         # RF-014 CA-03 + RF-012: the tariff is frozen here, and so is the
         # BREAKDOWN that explains it. A later price, factor or promotion change
         # (EXTENSION POINT P6) never moves either of them.
         monto_centimos=desglose.total_centimos,
         moneda=desglose.moneda,
-        modalidad_pago=ModalidadPago.PRESENCIAL.value,
+        modalidad_pago=datos.modalidad_pago.value,
+        # RF-014 flow 2a: "la reserva se mantiene en estado Pendiente de pago
+        # durante 15 minutos". The scheduler of INC-5 sweeps this column.
+        expira_en=(creada_en + pago_service.ventana_de_pago()) if en_linea else None,
+        creada_en=creada_en,
     )
 
     tarifa_service.congelar(db, reserva, desglose)
@@ -258,19 +284,27 @@ def crear(
     # RF-029: "confirmación" is one of the six lifecycle events, and it is the
     # one that is NOT a transition - creating a reservation has no origin state
     # to declare - so it is dispatched here instead of from the table.
-    notificacion_service.despachar(
-        db,
-        usuario,
-        EventoNotificacion.CONFIRMACION.value,
-        reserva=reserva,
-        momento=ahora_utc(),
-        **proveedores,
-    )
+    #
+    # Only for a booking that was born CONFIRMED. An online one is not
+    # confirmed yet, and the move that will confirm it
+    # (``pendiente_pago -> confirmada``) already carries
+    # ``evento_notificacion = 'confirmacion'``, so telling the customer here
+    # too would promise them a slot the gateway has not paid for and then
+    # promise it again.
+    if not en_linea:
+        notificacion_service.despachar(
+            db,
+            usuario,
+            EventoNotificacion.CONFIRMACION.value,
+            reserva=reserva,
+            momento=ahora_utc(),
+            **proveedores,
+        )
 
     db.commit()
     db.refresh(reserva)
 
-    if notificador is not NOTIFICADOR_PREDETERMINADO:
+    if notificador is not NOTIFICADOR_PREDETERMINADO and not en_linea:
         notificador.notificar(
             usuario.id,
             "Reserva confirmada",
@@ -384,6 +418,8 @@ def atencion_inmediata(
         estado=EstadoReserva.CONFIRMADA.value,
         monto_centimos=desglose.total_centimos,
         moneda=desglose.moneda,
+        # A walk-in pays at the counter by definition: the vehicle is already
+        # here and RF-019 flow 1a has no gateway step.
         modalidad_pago=ModalidadPago.PRESENCIAL.value,
         atencion_sin_reserva=True,
     )
@@ -485,13 +521,22 @@ def cancelar(
     notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
     **proveedores,
 ) -> tuple[Reserva, Dinero]:
-    """Cancel a reservation and free its block (RF-016).
+    """Cancel a reservation and free its block (RF-016 + RN-05).
 
     Which states may still be cancelled from - and where the cancellation lands
     - is read from ``transicion_estado`` (P3), so a reservation whose state no
     longer declares the move is refused with 422 (CA-02) and v1.0 opening the
     cancellation after the check-in (``en_recepcion``) was a row, not a branch.
-    The penalty comes from the injected policy - always zero in the MVP.
+
+    The penalty comes from the injected policy, which since INC-4 is RN-05 for
+    real: zero more than two hours ahead (CA-01), 20 % of the amount under that
+    (CA-02). The FLOW did not change to get there - that is what the policy
+    object was for.
+
+    Step 5 of the v1.0 delta - "el sistema inicia el reembolso correspondiente
+    si el pago fue en línea" - is :func:`_reembolsar_cancelacion` below, and
+    flow 5a is already in it: a reversal the gateway refuses becomes a
+    ``pendiente_manual`` row instead of an exception nobody reads.
     """
     momento = ahora_utc()
     penalidad = politica.calcular_penalidad(reserva, momento)
@@ -520,10 +565,64 @@ def cancelar(
     reserva.motivo_cancelacion = motivo_limpio
     reserva.cancelada_por_id = autor.id
     reserva.cancelada_en = momento
+    # RN-05: what was kept is part of the record too, so the "resumen de la
+    # cancelación" of step 3 can be read again later.
+    reserva.penalidad_centimos = penalidad.monto_centimos
+    # Nothing is waiting for the money any more.
+    reserva.expira_en = None
+
+    _reembolsar_cancelacion(db, reserva, penalidad, autor, momento=momento, **proveedores)
 
     db.commit()
     db.refresh(reserva)
     return reserva, penalidad
+
+
+def _reembolsar_cancelacion(
+    db: Session,
+    reserva: Reserva,
+    penalidad: Dinero,
+    autor: Usuario,
+    *,
+    momento: datetime,
+    **proveedores,
+) -> None:
+    """Give back what RN-05 does not keep, when there is anything to give back.
+
+    "Si el pago fue en línea" is read from the PAYMENT and not from
+    ``reserva.modalidad_pago``: what decides whether a reversal can be
+    automated is whether a gateway took the money, and a booking may well have
+    changed modality along the way (RF-025 flow 4a). A counter payment is
+    returned over the counter, through ``POST /pagos/{id}/reembolsos``.
+    """
+    pago = pago_repo.obtener_confirmado(db, reserva.id)
+    if pago is None or not pago.pasarela:
+        return
+
+    devolver = pago.saldo_centimos - penalidad.monto_centimos
+    if devolver <= 0:
+        # The penalty ate the whole balance. Nothing to reverse, and saying so
+        # in the log beats a refund row for zero soles.
+        return
+
+    tipo = (
+        TipoReembolso.TOTAL.value
+        if devolver >= pago.saldo_centimos
+        else TipoReembolso.PARCIAL.value
+    )
+    reembolso_service.solicitar(
+        db,
+        pago,
+        tipo=tipo,
+        motivo=MOTIVO_REEMBOLSO_CANCELACION.format(codigo=reserva.codigo),
+        idempotency_key=f"cancelacion-{reserva.id}-{pago.id}",
+        monto_centimos=devolver,
+        autor=autor,
+        momento=momento,
+        # The cancellation owns the transaction: one commit, one outcome.
+        confirmar=False,
+        **proveedores,
+    )
 
 
 def fin_estimado(reserva: Reserva) -> datetime:

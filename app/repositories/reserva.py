@@ -130,6 +130,28 @@ def listar_en_rango(
     return list(db.scalars(consulta).unique().all())
 
 
+def listar_expiradas(db: Session, momento: datetime, estados: Iterable[str]) -> list[Reserva]:
+    """Reservations whose payment window closed at or before ``momento``.
+
+    RF-014 flow 2a. ``estados`` is a parameter like everywhere else here: the
+    service reads from ``transicion_estado`` which states the payment operation
+    is still pending on, and this query takes no decision of its own.
+    """
+    estados = set(estados)
+    if not estados:
+        return []
+    consulta = (
+        _completa(select(Reserva))
+        .where(
+            Reserva.estado.in_(estados),
+            Reserva.expira_en.is_not(None),
+            Reserva.expira_en <= momento,
+        )
+        .order_by(Reserva.expira_en, Reserva.id)
+    )
+    return list(db.scalars(consulta).unique().all())
+
+
 def listar_por_inicio_entre(
     db: Session, desde: datetime, hasta: datetime, estados_activos: Iterable[str]
 ) -> list[Reserva]:
@@ -246,6 +268,8 @@ def crear(
     moneda: str,
     modalidad_pago: str,
     atencion_sin_reserva: bool = False,
+    expira_en: datetime | None = None,
+    creada_en: datetime | None = None,
 ) -> Reserva:
     reserva = Reserva(
         codigo=codigo,
@@ -261,7 +285,12 @@ def crear(
         moneda=moneda,
         modalidad_pago=modalidad_pago,
         atencion_sin_reserva=atencion_sin_reserva,
+        expira_en=expira_en,
     )
+    if creada_en is not None:
+        # RF-014 flow 2a: when the caller owns the instant, the two timestamps
+        # have to be the SAME instant - the window is measured between them.
+        reserva.creada_en = creada_en
     db.add(reserva)
     db.flush()
     return reserva
