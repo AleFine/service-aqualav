@@ -293,6 +293,13 @@ class EventoNotificacion(str, Enum):
     #: hand written dispatch - so turning it off, retranslating it or moving it
     #: to another channel stays an UPDATE.
     CALIFICACION = "calificacion"
+    #: RF-015: "notificación del cambio". Rescheduling does NOT move the state
+    #: - a reservation comes out of it exactly as confirmed as it went in - so
+    #: it is the one lifecycle notice that cannot hang off
+    #: ``transicion_estado.evento_notificacion``. It is still a template and an
+    #: event and nothing else: ``reserva_service.reprogramar`` hands the name
+    #: to ``notificacion_service.despachar`` and the rows decide the rest.
+    REPROGRAMACION = "reprogramacion"
 
 
 class PlataformaDispositivo(str, Enum):
@@ -317,6 +324,32 @@ class EstadoRecordatorio(str, Enum):
     PENDIENTE = "pendiente"
     ENVIADO = "enviado"
     RESPONDIDO = "respondido"
+
+
+class TipoMovimientoPuntos(str, Enum):
+    """Why the loyalty balance moved (RF-032 "saldo y movimientos de puntos").
+
+    The two directions RN-11 describes and nothing else: points come in when a
+    payment is confirmed and go out when a benefit is redeemed. A movement is
+    never edited or deleted - the balance IS the sum of the movements - which
+    is what makes a statement reconcilable months later.
+    """
+
+    ACUMULACION = "acumulacion"
+    CANJE = "canje"
+
+
+class EstadoCupon(str, Enum):
+    """Lifecycle of a redemption coupon (RF-032 "cupón de canje generado").
+
+    ``vencido`` is derived on read rather than swept: exactly like a promotion
+    (RF-011 flow 4a), a coupon whose ``vence_en`` went by simply stops being
+    honoured, and nothing has to run at midnight for that to be true.
+    """
+
+    EMITIDO = "emitido"
+    USADO = "usado"
+    VENCIDO = "vencido"
 
 
 class EstadoBahia(str, Enum):
@@ -390,6 +423,17 @@ MONEDA_PREDETERMINADA = "PEN"
 #: RF-031: the score is one to five stars, and nothing else is a score.
 PUNTUACION_MINIMA = 1
 PUNTUACION_MAXIMA = 5
+
+#: RN-11: "se acumula 1 punto por cada S/ 10.00 FACTURADOS". Expressed in the
+#: integer cents every amount of the system uses (P6), so the accrual is one
+#: floor division and never a float.
+CENTIMOS_POR_PUNTO = 1000
+
+#: RN-11: "100 puntos = un lavado básico sin costo". It is the price of the
+#: seeded benefit, not a hard coded rule: ``beneficio.puntos_requeridos`` is
+#: what the redemption reads, so a shop that reprices its loyalty programme
+#: updates a row.
+PUNTOS_LAVADO_BASICO = 100
 
 #: Neutral vehicle factor, in thousandths: 1000 = 1.0 (RN-04).
 #: Factors are integers on purpose - ``3000 x 1.3`` stops being ``3900`` the

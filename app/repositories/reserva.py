@@ -56,7 +56,10 @@ def listar_paginado(
     db: Session,
     *,
     usuario_id: int | None = None,
-    estado: str | None = None,
+    estados: Iterable[str] | None = None,
+    vehiculo_id: int | None = None,
+    desde: datetime | None = None,
+    hasta: datetime | None = None,
     pagina: int,
     tamanio: int,
 ) -> tuple[list[Reserva], int]:
@@ -64,12 +67,28 @@ def listar_paginado(
 
     ``usuario_id`` is the horizontal authorization filter (RF-017 CA-03); the
     service decides whether to pass it, the repository only applies it.
+
+    ``estados`` is a SET and not a single value (RF-017 v1.0). The mobile app's
+    aggregate screens ask for "everything still in progress", which is several
+    states at once, and one query with an ``IN`` is what replaces the fan of
+    one request per state the MVP forced on them. A single element behaves
+    exactly like the old ``estado`` filter did.
+
+    ``desde`` / ``hasta`` bound ``inicio`` and are already UTC instants: the
+    service turns the Lima dates the customer picked into them, because a day
+    is a local thing and a column is not.
     """
     filtros = []
     if usuario_id is not None:
         filtros.append(Reserva.usuario_id == usuario_id)
-    if estado is not None:
-        filtros.append(Reserva.estado == estado)
+    if estados:
+        filtros.append(Reserva.estado.in_(set(estados)))
+    if vehiculo_id is not None:
+        filtros.append(Reserva.vehiculo_id == vehiculo_id)
+    if desde is not None:
+        filtros.append(Reserva.inicio >= desde)
+    if hasta is not None:
+        filtros.append(Reserva.inicio < hasta)
 
     total = db.scalar(select(func.count(Reserva.id)).where(*filtros)) or 0
 
@@ -83,18 +102,30 @@ def listar_paginado(
 
 
 def bahias_ocupadas(
-    db: Session, inicio: datetime, fin: datetime, estados_activos: Iterable[str]
+    db: Session,
+    inicio: datetime,
+    fin: datetime,
+    estados_activos: Iterable[str],
+    *,
+    excluir_reserva_id: int | None = None,
 ) -> set[int]:
     """Bays holding an active reservation that overlaps ``[inicio, fin)``.
 
     RN-03: two intervals overlap unless one ends before the other starts, i.e.
     ``NOT (nueva.fin <= existente.inicio OR nueva.inicio >= existente.fin)``.
+
+    ``excluir_reserva_id`` is what rescheduling needs (RF-015): a booking being
+    moved must not collide with the block it is moving OUT of, or shifting a
+    45 minute service by fifteen minutes would report its own slot as taken.
+    Nobody else passes it, so the creation path is byte for byte what it was.
     """
     consulta = select(Reserva.bahia_id).where(
         Reserva.estado.in_(set(estados_activos)),
         Reserva.inicio < fin,
         Reserva.fin > inicio,
     )
+    if excluir_reserva_id is not None:
+        consulta = consulta.where(Reserva.id != excluir_reserva_id)
     return set(db.scalars(consulta).all())
 
 

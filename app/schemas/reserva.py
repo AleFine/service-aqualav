@@ -78,6 +78,18 @@ class CancelacionIn(BaseModel):
         return limpio
 
 
+class ReprogramacionIn(BaseModel):
+    """Body of ``POST /reservas/{id}/reprogramacion`` (RF-015).
+
+    Only the new start travels: the service does not change, so its duration
+    still decides where the block ends, and the bay is picked by the shop the
+    same way it is when the booking is created. Asking the customer to choose a
+    bay would let them take one the agenda had blocked (RF-018 CA-01).
+    """
+
+    inicio: datetime
+
+
 class CheckInIn(BaseModel):
     observaciones: str | None = Field(default=None, max_length=500)
     # The app re-sends with true after a RETRASO_REQUIERE_CONFIRMACION reply.
@@ -144,6 +156,12 @@ class ReservaOut(BaseModel):
     #: RF-014 flow 2a: when an unpaid online booking stops holding its block.
     #: ``None`` once it is paid, cancelled or was never online to begin with.
     expira_en: datetime | None = None
+    #: RN-06 / RF-015: how many times this booking has been moved, and how many
+    #: moves it has left. The second one is what the app needs to grey the
+    #: button out BEFORE the customer discovers the limit with a 422 - the same
+    #: reason ``transiciones_permitidas`` exists.
+    reprogramaciones: int = 0
+    reprogramaciones_restantes: int = 0
     # RF-019 v1.0: the token the reception ticket's QR encodes. Only a caller
     # holding ``reserva:leer_todas`` needs it - it is a scanning credential.
     codigo_qr: str | None = None

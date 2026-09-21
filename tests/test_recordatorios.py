@@ -225,12 +225,14 @@ def test_cancelar_sin_motivo_deja_uno_en_el_expediente(
 
 
 def test_reprogramar_queda_registrado_como_intencion(api_cliente, db, servicio_medio, vehiculo_id):
-    """RF-030 + RF-015: la reprogramación real es INC-7.
+    """RF-030 + RF-015: sin bloque elegido, la respuesta es una INTENCIÓN.
 
-    El camino queda abierto: la respuesta, su momento y el evento de dominio se
-    guardan ahora - reconstruirlos después sería imposible - y la reserva no se
-    mueve, porque RN-06 (máximo dos veces, con más de dos horas) se implementa
-    en un solo sitio y ese sitio es INC-7.
+    INC-7 conectó la mudanza de verdad, pero sólo cuando la respuesta trae el
+    bloque nuevo (``nuevo_inicio``). El recordatorio es una notificación, no un
+    selector de fechas: quien pulsa «reprogramar» abre el calendario, y hasta
+    que elige, lo único que hay que guardar es que quiso moverla. La respuesta,
+    su momento y el evento de dominio siguen escribiéndose aquí, la reserva
+    sigue sin moverse, y ``tests/test_reprogramacion.py`` cubre el otro camino.
     """
     reserva = _reserva_a_las(api_cliente, servicio_medio, vehiculo_id)
     _barrer(db)

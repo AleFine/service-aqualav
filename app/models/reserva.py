@@ -81,6 +81,17 @@ class Reserva(Base):
     #: for one booking (a demo, a support call) does not need a code change.
     #: NULL on a reservation that was born confirmed - nothing to expire.
     expira_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: RN-06: how many times this booking has already been moved. It is the
+    #: ONLY thing the rule counts, and it lives on the reservation rather than
+    #: in a side table because the reservation is what carries the allowance:
+    #: rescheduling moves this row, it does not create a new one, so the code
+    #: the customer knows, the payment, the receipt and the frozen breakdown
+    #: all stay attached to the service they belong to. The trail of WHERE it
+    #: used to be is ``evento_dominio`` (``reserva.reprogramada``), which is
+    #: append-only and already the audit surface RF-036 will read.
+    reprogramaciones_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     #: RN-05: what the shop keeps when the cancellation came in late. Written
     #: by the cancellation, zero when it came more than two hours ahead.
     penalidad_centimos: Mapped[int] = mapped_column(

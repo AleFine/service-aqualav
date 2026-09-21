@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     # setting so a demo can shorten it, never to relax it.
     pago_en_linea_ventana_minutos: int = 15
 
+    # RF-032: how long a coupon redeemed with points stays usable. The
+    # requirement puts no number on it and a coupon that never expires is a
+    # liability the shop cannot close, so thirty days is the working default.
+    cupon_canje_vigencia_dias: int = 30
+
     # RF-030 / plan section 4: the background sweep. It ships ON because a
     # reminder nobody runs is not a reminder, and it is switchable because the
     # sweep is always reachable through ``POST /interno/planificador`` - which

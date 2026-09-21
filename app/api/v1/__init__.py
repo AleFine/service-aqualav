@@ -16,6 +16,7 @@ from app.api.v1 import (
     catalogo,
     disponibilidad,
     estados,
+    fidelizacion,
     health,
     interno,
     notificaciones,
@@ -45,6 +46,8 @@ api_router.include_router(agenda.router)
 api_router.include_router(disponibilidad.router)
 api_router.include_router(estados.router)
 api_router.include_router(notificaciones.router)
+# RF-032: points, benefits and redemption coupons.
+api_router.include_router(fidelizacion.router)
 # RF-006 / RF-009 / RF-023: the generic object door of the simulated store.
 api_router.include_router(archivos.router)
 api_router.include_router(interno.router)

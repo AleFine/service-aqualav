@@ -136,6 +136,7 @@ trae un valor por defecto que funciona, así que la API arranca sin tocar
 | `DOCUMENTOS_PROVEEDOR` | `simulado` | Generación de PDF (`RF-027`; `RF-034` después). `app/services/proveedores/documentos.py` escribe **un PDF 1.4 real a mano**: sin reportlab y sin ninguna dependencia nueva. |
 | `COMPROBANTE_SERIE` | `B001` | La serie de la numeración correlativa de `RF-027 CA-01`. |
 | `PAGO_EN_LINEA_VENTANA_MINUTOS` | `15` | `RF-014 2a`: cuánto se mantiene una reserva en «Pendiente de pago» antes de caducar. **El requisito dice quince literalmente**: la variable existe para acortarla en una demo, nunca para relajarla. |
+| `CUPON_CANJE_VIGENCIA_DIAS` | `30` | `RF-032`: cuánto dura el cupón que produce un canje de puntos. El requisito no pone número y un cupón que no vence nunca es un pasivo que el local no puede cerrar, así que treinta días es el valor por defecto que funciona. |
 | `PLANIFICADOR_HABILITADO` | `true` | El bucle de fondo que barre los recordatorios de `RF-030`, **caduca los pagos en línea vencidos** (`RF-014 2a`) y promueve la cola de espera de `RF-020`. Apagarlo no es un modo degradado: el mismo barrido es una función pura invocable por `POST /api/v1/interno/planificador`. **La suite lo apaga** (`tests/conftest.py`) para que ninguna prueba dependa del reloj real. |
 | `PLANIFICADOR_INTERVALO_SEGUNDOS` | `300` | Cada cuánto barre el bucle de fondo. |
 
@@ -311,10 +312,11 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 | `GET` | `/estados` | autenticado | P3 | 200 |
 | `GET` | `/disponibilidad?fecha=&servicio_id=` | `disponibilidad:leer` | RF-013 | 200 · 404 |
 | `POST` | `/reservas` | `reserva:crear` | RF-014 | 201 · 404 · **409** · 422 |
-| `GET` | `/reservas?estado=&pagina=&tamanio=` | `reserva:leer_propias` o `reserva:leer_todas` | RF-017 | 200 · 403 |
+| `GET` | `/reservas?estado=&vehiculo_id=&desde=&hasta=&pagina=&tamanio=` | `reserva:leer_propias` o `reserva:leer_todas` | RF-017 v1.0 `CA-02` | 200 · 403 · **422** |
 | `GET` | `/reservas/{id}` | idem | RF-017, RF-022 | 200 · 404 |
 | `GET` | `/reservas/buscar?codigo=&placa=&qr=` | `reserva:check_in` | RF-019 | 200 · 404 |
 | `POST` | `/reservas/atencion-inmediata` | `reserva:check_in` | RF-019 `1a` | 201 · **409** · 422 |
+| `POST` | `/reservas/{id}/reprogramacion` | `reserva:reprogramar` | RF-015 `CA-01`, `CA-02`, `2b`, RN-06 | 200 · 404 · **409** · **422** |
 | `POST` | `/reservas/{id}/cancelacion` | `reserva:cancelar` | RF-016 | 200 · **422** |
 | `POST` | `/reservas/{id}/check-in` | `reserva:check_in` | RF-019 | 200 · **409** · 422 |
 | `POST` | `/reservas/{id}/estado` | `reserva:avanzar_estado` | RF-021 | 200 · **422** |
@@ -331,6 +333,9 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 | `GET` | `/pagos/{id}/reembolsos` | `pago:reembolsar` | RF-028 `3a` | 200 · 404 |
 | `POST` | `/reservas/{id}/recordatorio` | `reserva:leer_propias` o `reserva:leer_todas` | RF-030 | 200 · 403 · **404** · 422 |
 | `GET` | `/notificaciones?limite=` | autenticado | RF-029, RF-022 | 200 · 401 |
+| `GET` | `/fidelizacion/saldo` | `fidelizacion:leer` | RF-032, RN-11 | 200 · 401 · 403 |
+| `GET` | `/fidelizacion/beneficios` | `fidelizacion:leer` | RF-032 `4b` | 200 · 403 |
+| `POST` | `/fidelizacion/canjes` | `fidelizacion:canjear` | RF-032 `CA-02`, `4a`, `4b` | 201 · 403 · **422** |
 | `GET` | `/notificaciones/dispositivos` | autenticado | RF-029 | 200 · 401 |
 | `POST` | `/notificaciones/dispositivos` | autenticado | RF-029 | 201 · 401 · 422 |
 | `DELETE` | `/notificaciones/dispositivos/{id}` | autenticado | RF-029 | 204 · **404** |
@@ -372,6 +377,36 @@ sí mismo `rol:administrar` (`422 CAMBIO_DE_ROL_PROPIO`).
   las filas, arma un `Calendario` y se lo pasa. Por eso `es_laborable()` ya no
   devuelve siempre `True`, y una franja bloqueada desaparece de la
   disponibilidad de `RF-013` (`RF-018 CA-01`).
+- `RN-06` — una reserva se **reprograma como máximo dos veces**; la tercera
+  responde `422 LIMITE_DE_REPROGRAMACIONES` ofreciendo la salida que la propia
+  regla da: cancelar y reservar de nuevo. Además deben faltar **más de dos
+  horas** para el inicio (`RF-015 2b`, `422 REPROGRAMACION_FUERA_DE_PLAZO`); el
+  umbral es estricto, igual que el de `RN-05`. Reprogramar **edita la reserva**
+  —no crea otra—, así que el código, el pago, el comprobante, las evidencias y
+  el desglose congelado siguen pegados al servicio al que pertenecen, y el
+  bloque anterior vuelve a ofrecerse por el mero hecho de que la fila dejó de
+  ocuparlo (`CA-02`). El bloque nuevo pasa por `RN-02`, `RN-07` —feriados y
+  bloqueos incluidos— y `RN-03`, exactamente como uno recién creado. La tarifa
+  **no** se recalcula: `RF-014 CA-03` la congeló al crear la reserva.
+  `ReservaOut` trae `reprogramaciones` y `reprogramaciones_restantes` para que
+  la aplicación desactive el botón antes de descubrir el límite con un 422.
+- `RN-11` — se acumula **1 punto por cada S/ 10,00 facturados** al confirmarse
+  el pago, y **100 puntos** canjean un lavado básico sin costo. «Facturado» es
+  el `total_centimos` del desglose de `RF-012`, no el precio de catálogo, y la
+  división es entera: S/ 59,90 dan cinco puntos, no seis. El saldo **no es una
+  columna**: es la suma de `puntos_movimiento`, así que no hay una segunda
+  copia que pueda discrepar del historial que la explica. La acumulación es
+  idempotente por pago (`uq_puntos_movimiento_pago`), porque `RF-026 CA-02`
+  reproduce un cobro con la misma clave de idempotencia de forma rutinaria. Un
+  canje **no inventa un descuento**: materializa una `promocion` con cupón al
+  100 % sobre el servicio del beneficio, de modo que `RF-012` sigue siendo el
+  único sitio donde se calcula una tarifa. El derecho —de quién es, hasta
+  cuándo, si ya se gastó— vive en `cupon_canje`; un cupón de canje ajeno,
+  gastado o vencido se rechaza por el mismo camino que un cupón vencido de
+  marketing (`3a`: se informa el motivo y el total se recalcula sin él).
+- `RF-032 4b` — un beneficio **agotado o vencido se retira del listado** sin
+  que nada lo barra: la consulta pide `stock > 0` y vigencia, igual que una
+  promoción vencida deja de aplicarse sola.
 - `RF-020` — al asignar, la bahía pasa a `ocupada` y el servicio entra en la
   cola del operario. Sin bahía libre la reserva **no avanza**: queda en
   `cola_espera` con un tiempo estimado (`2a`). Si el operario elegido ya tiene
@@ -396,6 +431,16 @@ sí mismo `rol:administrar` (`422 CAMBIO_DE_ROL_PROPIO`).
   cupones sí pueden convivir: los elige el cliente escribiéndolos. Una
   promoción vencida deja de aplicarse **sola**, porque la vigencia se compara
   con la fecha del servicio en cada cálculo; nadie la desactiva.
+  Un cupón válido **gana** al descuento automático: no se suman. `INC-7` lo
+  revisó al traer el cupón de canje de `RF-032` por esta misma puerta y lo
+  mantuvo por tres razones: un canje descuenta el 100 %, así que acumularlo
+  dispararía la incidencia de `RF-012 4a` —pensada para una mala
+  configuración— en cada canje; los puntos son un recurso escaso que el cliente
+  ganó servicio a servicio, y gastarlos sobre un lavado que ya estaba rebajado
+  regalaría a la vez la promoción del local y los puntos del cliente; y
+  `RF-012 CA-02` está escrito como «el total no varía» al rechazar un cupón,
+  frase que solo tiene un significado mientras el cupón **sustituya** al
+  descuento automático.
 - `RN-05` — cancelar con **más de dos horas** de anticipación no tiene
   penalidad; con menos **se retiene el 20 %** del monto. Dos horas exactas ya
   es tarde: «más de» se lee estricto. El porcentaje se calcula sobre

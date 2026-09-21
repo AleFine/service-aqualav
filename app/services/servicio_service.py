@@ -81,6 +81,9 @@ def cotizar(db: Session, usuario: Usuario, datos: TarifaCalculoIn) -> Desglose:
         adicionales_ids=datos.adicionales,
         cupon=datos.cupon,
         fecha=datos.fecha,
+        # RF-032: a redeemed coupon belongs to ONE customer, so quoting with
+        # somebody else's code reports the rejection instead of honouring it.
+        usuario_id=usuario.id,
     )
     # RF-012 flows 3a and 4a are REPORTED even on a quote: the counter must be
     # able to explain later why a customer was told a coupon did not work.

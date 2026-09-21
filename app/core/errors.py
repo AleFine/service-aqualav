@@ -252,6 +252,39 @@ class TransicionInvalida(AppError):
     )
 
 
+class LimiteDeReprogramaciones(AppError):
+    """RN-06 / RF-015 CA-01 and flow 2a: two moves is the whole allowance.
+
+    A 422 and not a 409: nothing raced, the booking simply used up what the
+    rule gives it. The message carries the exit RN-06 itself names - "luego
+    debe cancelarse y crearse nuevamente" - because a customer told only "no"
+    would keep pressing the same button.
+    """
+
+    codigo = "LIMITE_DE_REPROGRAMACIONES"
+    http_status = 422
+    mensaje = (
+        "Esta reserva ya se reprogramó dos veces y no admite otro cambio. "
+        "Cancélala y crea una nueva con el horario que necesitas."
+    )
+
+
+class ReprogramacionFueraDePlazo(AppError):
+    """RF-015 flow 2b: "se exige que falten MÁS DE DOS HORAS para el inicio".
+
+    Same strict reading as RN-05 in ``politica_cancelacion``: two hours exactly
+    is already late. A block released with less notice than that is one the
+    shop cannot resell, which is precisely what the policy protects.
+    """
+
+    codigo = "REPROGRAMACION_FUERA_DE_PLAZO"
+    http_status = 422
+    mensaje = (
+        "Solo puedes reprogramar una reserva cuando faltan más de dos horas para su inicio. "
+        "Si ya no puedes asistir, cancélala desde la aplicación."
+    )
+
+
 class RetrasoRequiereConfirmacion(AppError):
     codigo = "RETRASO_REQUIERE_CONFIRMACION"
     http_status = 409
@@ -521,6 +554,42 @@ class PlazoDeCalificacionVencido(AppError):
 
 
 # --------------------------------------------------------------------------
+# Loyalty programme (RF-032, RN-11)
+# --------------------------------------------------------------------------
+class PuntosInsuficientes(AppError):
+    """RF-032 CA-02 / flow 4a: "se informan los puntos faltantes".
+
+    The number of missing points is not decoration: it is the only thing that
+    turns a refusal into a plan, so it travels in ``detalles`` and the message
+    tells the customer what earns them (RN-11: S/ 10,00 billed = one point).
+    """
+
+    codigo = "PUNTOS_INSUFICIENTES"
+    http_status = 422
+    mensaje = (
+        "No te alcanzan los puntos para canjear ese beneficio. "
+        "Acumulas 1 punto por cada S/ 10,00 facturados en tus servicios."
+    )
+
+
+class BeneficioNoDisponible(AppError):
+    """RF-032 flow 4b: "beneficio agotado o vencido -> se retira del listado".
+
+    Withdrawing it from the listing is only half the rule; the other half is
+    what happens to somebody who had the old listing open. A 422 rather than a
+    404: the benefit exists, it is simply not redeemable any more, and saying
+    so is what lets the app refresh instead of showing "no encontrado".
+    """
+
+    codigo = "BENEFICIO_NO_DISPONIBLE"
+    http_status = 422
+    mensaje = (
+        "Ese beneficio ya no está disponible: se agotó o venció su vigencia. "
+        "Actualiza la lista para ver los que siguen vigentes."
+    )
+
+
+# --------------------------------------------------------------------------
 # Generic
 # --------------------------------------------------------------------------
 class RecursoNoEncontrado(AppError):
@@ -570,6 +639,8 @@ ERRORES_POR_CODIGO: dict[str, type[AppError]] = {
         ReservaBloqueOcupado,
         TransicionInvalida,
         RetrasoRequiereConfirmacion,
+        LimiteDeReprogramaciones,
+        ReprogramacionFueraDePlazo,
         FranjaConReservas,
         BahiaConReservas,
         SinOperarioDisponible,
@@ -591,6 +662,8 @@ ERRORES_POR_CODIGO: dict[str, type[AppError]] = {
         ServicioNoEnCurso,
         CalificacionNoHabilitada,
         PlazoDeCalificacionVencido,
+        PuntosInsuficientes,
+        BeneficioNoDisponible,
         RecursoNoEncontrado,
         ErrorDeValidacion,
         DatosInvalidos,

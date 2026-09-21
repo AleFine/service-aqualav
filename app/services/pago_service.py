@@ -9,7 +9,8 @@ Three operations live in this module and they share one rule - **the money
 decides, not the state name**:
 
 * :func:`registrar` is the counter charge of the MVP. Unchanged, except that a
-  confirmed payment now issues its receipt (RF-027);
+  confirmed payment now issues its receipt (RF-027) and credits the loyalty
+  points of RN-11 (RF-032: "acumulación al confirmarse el pago");
 * :func:`cobrar_en_linea` is the gateway charge of RF-026 v1.0. It records the
   external identifier, reports a rejection with its reason (flow 3a) and, when
   the answer never arrives, **asks for the state with the same idempotency key
@@ -51,7 +52,7 @@ from app.models import (
 )
 from app.repositories import pago as pago_repo
 from app.schemas import PagoCrear, PagoEnLineaCrear
-from app.services import comprobante_service, eventos, operacion_service
+from app.services import comprobante_service, eventos, fidelizacion_service, operacion_service
 from app.services.proveedores import pasarela as pasarela_mod
 from app.services.proveedores.pasarela import ProveedorPasarela, proveedor_pasarela
 
@@ -173,6 +174,10 @@ def registrar(
     comprobante_service.emitir(
         db, reserva, pago, autor_id=autor.id, momento=pago.registrado_en, **proveedores
     )
+    # RF-032 / RN-11: "acumulación AL CONFIRMARSE EL PAGO". Same door as the
+    # receipt, for the same reason - it is one moment however the money came
+    # in - and idempotent by ``pago_id``, so a replayed key credits once.
+    fidelizacion_service.acreditar(db, reserva, pago, momento=pago.registrado_en)
 
     db.commit()
     db.refresh(pago)
@@ -340,6 +345,10 @@ def cobrar_en_linea(
         comprobante_service.emitir(
             db, reserva, pago, autor_id=autor.id, momento=pago.registrado_en, **proveedores
         )
+        # RF-032 / RN-11: only an APPROVED charge earns points. A rejected or
+        # unsettled one leaves the reservation waiting, so there is nothing
+        # billed yet to reward.
+        fidelizacion_service.acreditar(db, reserva, pago, momento=pago.registrado_en)
         db.commit()
         db.refresh(pago)
         return pago, True

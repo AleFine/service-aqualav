@@ -46,7 +46,7 @@ from app.models import (
 from app.repositories import tarifa as tarifa_repo
 from app.repositories import vehiculo as vehiculo_repo
 from app.schemas import FactorIn
-from app.services import eventos
+from app.services import eventos, fidelizacion_service
 
 #: Permission that guards the factor administration (RF-010 delta, P5).
 PERMISO_ADMINISTRAR = "servicio:administrar"
@@ -371,6 +371,7 @@ def calcular(
     adicionales_ids: list[int] | None = None,
     cupon: str | None = None,
     fecha: date | None = None,
+    usuario_id: int | None = None,
 ) -> Desglose:
     """``(base x factor) + adicionales - descuentos``, term by term (RN-04).
 
@@ -378,12 +379,35 @@ def calcular(
     promotion valid on Tuesdays has to look at the Tuesday the customer is
     coming in. It defaults to today for the tariff preview.
 
+    ``usuario_id`` is who is asking, and it matters for exactly one thing: a
+    coupon that came out of the loyalty programme (RF-032) belongs to ONE
+    person and is spent ONCE, whereas a marketing coupon belongs to whoever
+    types it. Omitting it therefore refuses redeemed coupons and leaves every
+    other coupon untouched, which is the safe default for the public quote.
+
     Flow 3a: an invalid or expired coupon does NOT abort the calculation. It is
     recorded with its reason and the total is recomputed without it, falling
     back to whatever automatic promotion was already in force.
 
     Flow 4a: a discount larger than the total clamps it to zero and raises an
     incident instead of billing a negative amount.
+
+    **A valid coupon still WINS over the automatic promotion; they do not add
+    up.** INC-2 decided that and INC-7 deliberately kept it after bringing the
+    redemption coupon of RF-032 through this very door, for three reasons
+    worth writing down:
+
+    * RF-032's coupon is 100 % off. Stacking it on top of a live promotion
+      would make the discount exceed the total on every single redemption and
+      fire flow 4a's incident - a signal meant for a MISCONFIGURATION - on the
+      happy path, every time;
+    * points are a scarce thing the customer earned over many services. Letting
+      them be spent on a wash that was already discounted would quietly hand
+      the shop's promotion and the customer's points to the same booking;
+    * RF-012 CA-02 is written as "el total no varía" when a coupon is rejected.
+      That sentence only has one meaning while the coupon REPLACES the
+      automatic discount; under stacking, rejecting a coupon would have to
+      restore a different number and the CA would stop being checkable.
     """
     fecha = fecha or ahora().date()
     factor_milesimas = factor_de(db, servicio_id, tipo_vehiculo)
@@ -405,6 +429,11 @@ def calcular(
             "El cupón no existe. Revisa el código e inténtalo de nuevo."
             if candidata is None
             else motivo_no_aplica(candidata, servicio_id, fecha)
+            # RF-032: a redeemed coupon has an owner and one use. The check
+            # lives behind the SAME ``motivo`` variable as every other reason,
+            # so flow 3a reports it, records it and recalculates without it
+            # exactly as it does for an expired marketing coupon.
+            or fidelizacion_service.motivo_cupon_no_canjeable(db, candidata.id, usuario_id)
         )
         if candidata is not None and motivo is None:
             promocion = candidata

@@ -194,3 +194,81 @@ def test_estado_insertado_como_dato_ocupa_bahia(
     assert avance.status_code == 200, avance.text
 
     assert libres() == ocupadas_en_recepcion, "el coche sigue dentro: la bahía no se libera"
+
+
+# --------------------------------------------------------------------------
+# RF-013 delta v1.0 - la disponibilidad respeta bloqueos Y feriados
+# --------------------------------------------------------------------------
+def test_la_busqueda_de_la_siguiente_fecha_salta_los_feriados(
+    api_cliente, api_admin, servicio_corto
+):
+    """RF-013 `3a` con el calendario de RF-018 encima.
+
+    El barrido hacia adelante que propone «la siguiente fecha con cupo» usa el
+    MISMO calendario que la consulta del día, así que un feriado no puede
+    colarse como sugerencia. Sin esto, el flujo alterno propondría al cliente
+    justamente el día en que el local no abre.
+    """
+    from app.core.horario import ahora
+
+    manana = ahora().date() + timedelta(days=1)
+    alta = api_admin.post(
+        f"{RUTA}/agenda/dias-no-laborables",
+        json={"fecha": manana.isoformat(), "motivo": "Feriado del taller"},
+    )
+    assert alta.status_code == 201, alta.text
+
+    ayer = ahora().date() - timedelta(days=1)
+    cuerpo = _bloques(api_cliente, ayer, servicio_corto.id)
+
+    assert cuerpo["bloques"] == []
+    assert cuerpo["siguiente_fecha_disponible"] != manana
+
+
+def test_un_feriado_no_es_laborable_y_no_ofrece_nada(api_cliente, api_admin, servicio_corto):
+    """RF-013 delta: «la fecha es un día no laborable» incluye los feriados.
+
+    El MVP no podía responder esto: ``es_laborable`` devolvía siempre ``True``.
+    Desde INC-1B el calendario es un dato, y esta prueba lo vuelve a fijar
+    porque RF-013 delega en él su flujo `4a`.
+    """
+    fecha = proximo_lunes(dias_minimos=3)
+    api_admin.post(
+        f"{RUTA}/agenda/dias-no-laborables",
+        json={"fecha": fecha.isoformat(), "motivo": "Aniversario del local"},
+    )
+
+    cuerpo = _bloques(api_cliente, fecha, servicio_corto.id)
+
+    assert cuerpo["laborable"] is False
+    assert cuerpo["bloques"] == []
+
+
+def test_una_franja_bloqueada_recorta_solo_sus_horas(api_cliente, api_admin, db, servicio_corto):
+    """RF-013 delta + RF-018 `CA-01`, con una sola bahía para que se note.
+
+    Bloquear de 10:00 a 11:00 tiene que quitar exactamente los bloques que se
+    solapan con esa franja y dejar en pie los demás: un bloqueo que vaciara el
+    día entero cumpliría el CA por accidente.
+    """
+    from tests.conftest import dejar_una_sola_bahia
+
+    dejar_una_sola_bahia(db)
+    fecha = proximo_lunes(dias_minimos=3)
+
+    bloqueo = api_admin.post(
+        f"{RUTA}/agenda/bloqueos",
+        json={
+            "inicio": instante(fecha, 10, 0).isoformat(),
+            "fin": instante(fecha, 11, 0).isoformat(),
+            "motivo": "mantenimiento",
+        },
+    )
+    assert bloqueo.status_code == 201, bloqueo.text
+
+    horas = _horas(_bloques(api_cliente, fecha, servicio_corto.id))
+
+    assert (10, 0) not in horas
+    assert (10, 30) not in horas
+    assert (9, 0) in horas, "antes de la franja el local sigue abierto"
+    assert (11, 0) in horas, "y después también"

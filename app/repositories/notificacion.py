@@ -220,3 +220,46 @@ def responder_recordatorio(
     fila.respondido_en = momento
     db.flush()
     return fila
+
+
+def rearmar_recordatorio(
+    db: Session,
+    fila: Recordatorio,
+    *,
+    programado_para: datetime,
+    estado: str,
+) -> Recordatorio:
+    """Point an existing reminder at a new start time (RF-015 + RF-030).
+
+    Rescheduling moves the reservation, so the reminder that belonged to the
+    old block no longer means anything: it is re-armed for the new one rather
+    than deleted, because the row is UNIQUE per reservation and deleting it
+    would lose the answer that caused the move. ``enviado_en`` goes back to
+    ``NULL``, which is the only thing the sweep looks at before sending.
+    """
+    fila.programado_para = programado_para
+    fila.enviado_en = None
+    fila.estado = estado
+    db.flush()
+    return fila
+
+
+def marcar_recordatorio_enviado(
+    db: Session,
+    fila: Recordatorio,
+    *,
+    programado_para: datetime,
+    enviado_en: datetime,
+    estado: str,
+) -> Recordatorio:
+    """Record that a re-armed reminder went out (RF-030 after RF-015).
+
+    Only reachable for a row whose ``enviado_en`` is NULL, which since RF-015
+    means "re-armed for a new block". The first send of a reminder still goes
+    through :func:`crear_recordatorio`.
+    """
+    fila.programado_para = programado_para
+    fila.enviado_en = enviado_en
+    fila.estado = estado
+    db.flush()
+    return fila

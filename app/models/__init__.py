@@ -15,12 +15,14 @@ from app.models.autenticacion import (
 from app.models.bahia import MAXIMO_BAHIAS, Bahia
 from app.models.calidad import Calificable, Calificacion, Evidencia
 from app.models.enums import (
+    CENTIMOS_POR_PUNTO,
     ESTADOS_CUENTA_CON_ACCESO,
     ESTADOS_PAGO_COBRADO,
     FACTOR_BASE_MILESIMAS,
     MEDIOS_EN_LINEA,
     MEDIOS_PRESENCIALES,
     MONEDA_PREDETERMINADA,
+    PUNTOS_LAVADO_BASICO,
     PUNTUACION_MAXIMA,
     PUNTUACION_MINIMA,
     CanalNotificacion,
@@ -29,6 +31,7 @@ from app.models.enums import (
     EstadoCargaEvidencia,
     EstadoComprobante,
     EstadoCuenta,
+    EstadoCupon,
     EstadoEnvio,
     EstadoPago,
     EstadoRecordatorio,
@@ -46,11 +49,14 @@ from app.models.enums import (
     RespuestaRecordatorio,
     TipoDescuento,
     TipoDocumento,
+    TipoMovimientoPuntos,
     TipoReembolso,
     TipoVehiculo,
 )
 from app.models.evento import EventoDominio
+from app.models.fidelizacion import Beneficio, CuponCanje, PuntosMovimiento
 from app.models.notificacion import (
+    VENTANA_RECORDATORIO,
     Dispositivo,
     Notificacion,
     PlantillaNotificacion,
@@ -73,6 +79,7 @@ from app.models.usuario import Usuario
 from app.models.vehiculo import Vehiculo
 
 __all__ = [
+    "CENTIMOS_POR_PUNTO",
     "ESTADOS_CUENTA_CON_ACCESO",
     "ESTADOS_PAGO_COBRADO",
     "FACTOR_BASE_MILESIMAS",
@@ -80,10 +87,13 @@ __all__ = [
     "MEDIOS_EN_LINEA",
     "MEDIOS_PRESENCIALES",
     "MONEDA_PREDETERMINADA",
+    "PUNTOS_LAVADO_BASICO",
+    "VENTANA_RECORDATORIO",
     "PUNTUACION_MAXIMA",
     "PUNTUACION_MINIMA",
     "AsignacionServicio",
     "Bahia",
+    "Beneficio",
     "BloqueoFranja",
     "Calificable",
     "Calificacion",
@@ -91,12 +101,14 @@ __all__ = [
     "CarpetaArchivo",
     "ColaEspera",
     "Comprobante",
+    "CuponCanje",
     "DiaNoLaborable",
     "Dispositivo",
     "EstadoBahia",
     "EstadoCargaEvidencia",
     "EstadoComprobante",
     "EstadoCuenta",
+    "EstadoCupon",
     "EstadoEnvio",
     "EstadoPago",
     "EstadoRecordatorio",
@@ -123,6 +135,7 @@ __all__ = [
     "PlantillaNotificacion",
     "PlataformaDispositivo",
     "Promocion",
+    "PuntosMovimiento",
     "Recordatorio",
     "Reembolso",
     "Reserva",
@@ -137,6 +150,7 @@ __all__ = [
     "ServicioPrecio",
     "TipoDescuento",
     "TipoDocumento",
+    "TipoMovimientoPuntos",
     "TipoReembolso",
     "TipoVehiculo",
     "TokenRecuperacion",

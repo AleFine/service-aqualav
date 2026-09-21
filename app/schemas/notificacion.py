@@ -58,6 +58,12 @@ class RecordatorioRespuestaIn(BaseModel):
     respuesta: RespuestaRecordatorio
     # Only read when the answer is a cancellation (RF-016 CA-03 wants a reason).
     motivo: str | None = Field(default=None, max_length=300)
+    #: RF-015 through RF-030: the block the customer picked when they answered
+    #: "reprogramo". Optional, because the reminder is a notification and not a
+    #: date picker - an answer without a block stays the recorded intent INC-5
+    #: wrote, and one WITH a block performs the real move, RN-06 and the
+    #: two-hour window included. Ignored for the other two answers.
+    nuevo_inicio: datetime | None = None
 
 
 class RecordatorioOut(BaseModel):

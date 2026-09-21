@@ -9,12 +9,15 @@ from sqlalchemy.orm import Session
 
 from app.core.horario import a_lima, desde_bd
 from app.models import (
+    CENTIMOS_POR_PUNTO,
     ESTADOS_PAGO_COBRADO,
     AsignacionServicio,
     Bahia,
+    Beneficio,
     Calificacion,
     ColaEspera,
     Comprobante,
+    CuponCanje,
     DiaNoLaborable,
     Dispositivo,
     EstadoPago,
@@ -25,6 +28,7 @@ from app.models import (
     Paquete,
     Permiso,
     Promocion,
+    PuntosMovimiento,
     Recordatorio,
     Reembolso,
     Reserva,
@@ -40,12 +44,14 @@ from app.schemas import (
     AsignacionOut,
     BahiaOut,
     BahiaResumen,
+    BeneficioOut,
     CalificacionEstadoOut,
     CalificacionOut,
     CancelacionOut,
     ClienteResumen,
     ColaEsperaOut,
     ComprobanteOut,
+    CuponCanjeOut,
     DesgloseOut,
     DiaNoLaborableOut,
     Dinero,
@@ -53,6 +59,7 @@ from app.schemas import (
     EvidenciaOut,
     FactorOut,
     HistorialItem,
+    MovimientoPuntosOut,
     NotificacionOut,
     PagoOut,
     PaqueteLineaOut,
@@ -65,6 +72,7 @@ from app.schemas import (
     ReservaOut,
     ResultadoAsignacionOut,
     RolOut,
+    SaldoPuntosOut,
     ServicioOut,
     ServicioResumen,
     SugerenciaOut,
@@ -74,6 +82,7 @@ from app.schemas import (
 from app.services import (
     archivo_service,
     calificacion_service,
+    fidelizacion_service,
     operacion_service,
     reserva_service,
     seguimiento_service,
@@ -477,6 +486,73 @@ def armar_estado_calificacion(ventana: calificacion_service.Ventana) -> Califica
     )
 
 
+def armar_beneficio(beneficio: Beneficio, *, puntos: int | None = None) -> BeneficioOut:
+    """RF-032: one benefit, plus whether this customer can afford it.
+
+    ``valor_referencial`` is the catalogue price of the service the benefit
+    gives away, and it is informative on purpose: the coupon discounts 100 %,
+    so what the customer actually saves is whatever the tariff comes to on the
+    day they book, factor and add-ons included (RN-04).
+    """
+    precio = beneficio.servicio.precio_vigente if beneficio.servicio is not None else None
+    faltan = max(0, beneficio.puntos_requeridos - puntos) if puntos is not None else None
+    return BeneficioOut(
+        id=beneficio.id,
+        nombre=beneficio.nombre,
+        descripcion=beneficio.descripcion,
+        puntos_requeridos=beneficio.puntos_requeridos,
+        servicio_id=beneficio.servicio_id,
+        servicio=beneficio.servicio.nombre if beneficio.servicio is not None else None,
+        valor_referencial=(
+            Dinero.de_centimos(precio.monto_centimos, precio.moneda) if precio is not None else None
+        ),
+        stock=beneficio.stock,
+        vigente_hasta=beneficio.vigente_hasta,
+        alcanzable=faltan == 0 if faltan is not None else True,
+        puntos_faltantes=faltan or None,
+    )
+
+
+def armar_movimiento_puntos(fila: PuntosMovimiento) -> MovimientoPuntosOut:
+    """RF-032: one statement line, with what was billed to produce it (RN-11)."""
+    return MovimientoPuntosOut(
+        id=fila.id,
+        tipo=fila.tipo,
+        puntos=fila.puntos,
+        saldo_resultante=fila.saldo_resultante,
+        reserva_id=fila.reserva_id,
+        base=Dinero.de_centimos(fila.base_centimos) if fila.base_centimos else None,
+        beneficio=fila.beneficio.nombre if fila.beneficio is not None else None,
+        ocurrido_en=a_lima(desde_bd(fila.ocurrido_en)),
+    )
+
+
+def armar_cupon_canje(fila: CuponCanje) -> CuponCanjeOut:
+    """RF-032 "Salidas": the coupon the redemption generated."""
+    return CuponCanjeOut(
+        id=fila.id,
+        codigo=fila.codigo,
+        beneficio=fila.beneficio.nombre,
+        estado=fila.estado,
+        vence_en=a_lima(desde_bd(fila.vence_en)),
+        emitido_en=a_lima(desde_bd(fila.emitido_en)),
+        reserva_id=fila.reserva_id,
+        usado_en=a_lima(desde_bd(fila.usado_en)) if fila.usado_en is not None else None,
+    )
+
+
+def armar_saldo_puntos(saldo: fidelizacion_service.Saldo) -> SaldoPuntosOut:
+    """RF-032: balance, statement and coupons in the one payload the app reads."""
+    return SaldoPuntosOut(
+        puntos=saldo.puntos,
+        puntos_para_el_siguiente=saldo.puntos_para_el_siguiente,
+        # RN-11 travels with the answer so the app never retypes the rule.
+        centimos_por_punto=CENTIMOS_POR_PUNTO,
+        movimientos=[armar_movimiento_puntos(fila) for fila in saldo.movimientos],
+        cupones=[armar_cupon_canje(fila) for fila in saldo.cupones],
+    )
+
+
 def _pago_visible(reserva: Reserva) -> Pago | None:
     """The payment that describes the reservation, or the last attempt.
 
@@ -534,6 +610,12 @@ def armar_reserva(
         modalidad_pago=reserva.modalidad_pago,
         estado_pago=_estado_de_pago(pago),
         expira_en=(a_lima(desde_bd(reserva.expira_en)) if reserva.expira_en is not None else None),
+        # RN-06: what the customer has used and what is left, so the app can
+        # disable the button instead of discovering the limit with a 422.
+        reprogramaciones=reserva.reprogramaciones_count,
+        reprogramaciones_restantes=max(
+            0, reserva_service.MAXIMO_REPROGRAMACIONES - reserva.reprogramaciones_count
+        ),
         # The QR is a scanning credential for the counter, so it follows the
         # same horizontal rule as ``observaciones_ingreso``.
         codigo_qr=(reserva.codigo_qr if reserva_service.puede_ver_todas(permisos) else None),

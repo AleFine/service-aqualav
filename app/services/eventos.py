@@ -124,6 +124,11 @@ RESERVA_ASISTENCIA_CONFIRMADA = "reserva.asistencia_confirmada"
 #: RF-030 + RF-015: the customer asked to move the appointment. INC-7 turns the
 #: intent into the real move; the intent is recorded now so it is not lost.
 RESERVA_REPROGRAMACION_SOLICITADA = "reserva.reprogramacion_solicitada"
+#: RF-015: the booking was MOVED. It is the only record of where it used to
+#: be - rescheduling edits ``reserva.inicio``, ``fin`` and ``bahia_id`` in
+#: place so the code, the payment and the frozen breakdown stay attached - so
+#: ``datos`` carries the previous block and the resulting counter (RN-06).
+RESERVA_REPROGRAMADA = "reserva.reprogramada"
 #: RF-020 flow 2a, closed by the scheduler: a queued vehicle got its bay
 #: without the counter having to retry the assignment by hand.
 RESERVA_PROMOVIDA_DE_COLA = "reserva.promovida_de_cola"
@@ -154,6 +159,14 @@ COMPROBANTE_NO_EMITIDO = "comprobante.no_emitido"
 #: NOT an error swallowed somewhere - it is a row waiting for a human.
 REEMBOLSO_PROCESADO = "reembolso.procesado"
 REEMBOLSO_PENDIENTE_MANUAL = "reembolso.pendiente_manual"
+#: RF-032 / RN-11: the loyalty ledger, audited under the CUSTOMER because
+#: points belong to a person and not to a booking - a redemption has no
+#: reservation at all. ``puntos.cupon_usado`` is logged under the RESERVATION
+#: instead, because by then what happened is something that happened to a
+#: service.
+PUNTOS_ACUMULADOS = "puntos.acumulados"
+PUNTOS_CANJEADOS = "puntos.canjeados"
+PUNTOS_CUPON_USADO = "puntos.cupon_usado"
 #: RF-018 / bay administration.
 BAHIA_CREADA = "bahia.creada"
 BAHIA_ACTUALIZADA = "bahia.actualizada"

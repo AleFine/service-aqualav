@@ -57,6 +57,13 @@ from app.schemas.common import (
 )
 from app.schemas.disponibilidad import BloqueDisponible, DisponibilidadOut
 from app.schemas.estado import EstadoCatalogoOut
+from app.schemas.fidelizacion import (
+    BeneficioOut,
+    CanjeIn,
+    CuponCanjeOut,
+    MovimientoPuntosOut,
+    SaldoPuntosOut,
+)
 from app.schemas.notificacion import (
     DispositivoIn,
     DispositivoOut,
@@ -83,6 +90,7 @@ from app.schemas.reserva import (
     CheckInIn,
     CheckOutIn,
     HistorialItem,
+    ReprogramacionIn,
     ReservaCrear,
     ReservaOut,
     RevisionIn,
@@ -147,6 +155,7 @@ __all__ = [
     "BahiaCrear",
     "BahiaOut",
     "BahiaResumen",
+    "BeneficioOut",
     "BloqueDisponible",
     "BloqueoIn",
     "BloqueoOut",
@@ -154,6 +163,7 @@ __all__ = [
     "CalificacionIn",
     "CalificacionOut",
     "CambioEstadoIn",
+    "CanjeIn",
     "CancelacionIn",
     "CancelacionOut",
     "CheckInIn",
@@ -162,6 +172,7 @@ __all__ = [
     "ColaEsperaOut",
     "ComprobanteOut",
     "ContenidoError",
+    "CuponCanjeOut",
     "DesgloseOut",
     "DetalleError",
     "DiaNoLaborableIn",
@@ -184,6 +195,7 @@ __all__ = [
     "LogoutIn",
     "MensajeOut",
     "ModalidadPagoIn",
+    "MovimientoPuntosOut",
     "NotificacionOut",
     "Pagina",
     "PagoCrear",
@@ -210,6 +222,7 @@ __all__ = [
     "ReenvioVerificacionIn",
     "RefreshIn",
     "RegistroIn",
+    "ReprogramacionIn",
     "ReservaCrear",
     "ReservaOut",
     "RespuestaRecordatorioOut",
@@ -217,6 +230,7 @@ __all__ = [
     "ResultadoAsignacionOut",
     "RevisionIn",
     "RolOut",
+    "SaldoPuntosOut",
     "ServicioActualizar",
     "ServicioCrear",
     "ServicioOut",

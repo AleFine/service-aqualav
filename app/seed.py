@@ -19,7 +19,9 @@ from app.core.horario import TRAMOS_RN07, ahora
 from app.core.security import hash_password
 from app.database import SessionLocal
 from app.models import (
+    PUNTOS_LAVADO_BASICO,
     Bahia,
+    Beneficio,
     CanalNotificacion,
     EstadoBahia,
     EstadoCuenta,
@@ -85,6 +87,9 @@ PERMISOS: dict[str, str] = {
     ),
     "evidencia:registrar": "Registrar fotografías de evidencia de un servicio (RF-023).",
     "calificacion:crear": "Calificar un servicio entregado propio (RF-031).",
+    "reserva:reprogramar": "Mover una reserva a otro bloque horario (RF-015).",
+    "fidelizacion:leer": "Consultar el saldo de puntos y los beneficios canjeables.",
+    "fidelizacion:canjear": "Canjear puntos por un beneficio y obtener su cupón.",
 }
 
 #: role name -> Spanish description (RF-004 v1.0: four roles).
@@ -123,6 +128,13 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
         # RF-031: rating the service is what the CUSTOMER does, and only on
         # their own booking - ``calificacion_service`` checks that too.
         "calificacion:crear",
+        # RF-015 names the Customer and the Receptionist as its actors. The
+        # horizontal filter of ``reserva_service.obtener`` is what keeps a
+        # customer inside their own bookings.
+        "reserva:reprogramar",
+        # RF-032: the points are the customer's and so is the redemption.
+        "fidelizacion:leer",
+        "fidelizacion:canjear",
     ),
     # The counter: receives the vehicle, assigns it, charges it and hands it
     # back. It does NOT advance the service inside the bay.
@@ -141,6 +153,8 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
         "reserva:asignar",
         "reserva:revisar",
         "reserva:check_out",
+        # RF-015: the counter moves a booking for a customer on the phone.
+        "reserva:reprogramar",
         "pago:registrar",
         # The counter also takes a card at the till through the gateway, and
         # settles the modality with the customer in front of them.
@@ -376,6 +390,14 @@ CANALES_POR_EVENTO: dict[str, tuple[str, ...]] = {
         CanalNotificacion.CORREO.value,
         CanalNotificacion.PUSH.value,
     ),
+    # RF-015 "Salidas": "notificación del cambio", and its "Externo" line says
+    # push/correo [MOCK] by name. A booking moving is exactly what a customer
+    # has to find out about without opening the app.
+    EventoNotificacion.REPROGRAMACION.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+        CanalNotificacion.PUSH.value,
+    ),
     # RF-022 flow 4a: the new delivery time. Push is the channel the SRS names.
     EventoNotificacion.RETRASO.value: (
         CanalNotificacion.EN_APP.value,
@@ -468,6 +490,18 @@ TEXTOS: dict[tuple[str, str], tuple[str, str]] = {
         "Booking {codigo} cancelled",
         "Your booking {codigo} for «{servicio}» on {inicio} has been cancelled. "
         "You can book another slot from the app whenever you like.",
+    ),
+    (EventoNotificacion.REPROGRAMACION.value, Idioma.ES.value): (
+        "Reserva {codigo} reprogramada",
+        "Hola {cliente}: tu reserva {codigo} para «{servicio}» quedó reprogramada "
+        "para el {inicio} en la {bahia}. El bloque anterior volvió a quedar "
+        "disponible. Llevas {reprogramaciones} de 2 reprogramaciones.",
+    ),
+    (EventoNotificacion.REPROGRAMACION.value, Idioma.EN.value): (
+        "Booking {codigo} rescheduled",
+        "Hi {cliente}: your booking {codigo} for «{servicio}» moved to {inicio} "
+        "in {bahia}. The previous slot is available again. You have used "
+        "{reprogramaciones} of your 2 reschedules.",
     ),
     (EventoNotificacion.RETRASO.value, Idioma.ES.value): (
         "Nueva hora de entrega de tu vehículo {placa}",
@@ -598,6 +632,22 @@ FACTORES: tuple[tuple[str | None, str, int], ...] = (
     (None, TipoVehiculo.CAMIONETA.value, 1400),
     (None, TipoVehiculo.MOTOCICLETA.value, 800),
     ("Lavado Express", TipoVehiculo.MOTOCICLETA.value, 700),
+)
+
+#: RN-11 as DATA: "100 puntos = un lavado básico sin costo". The rule is this
+#: row, not a constant in ``fidelizacion_service``, so a shop that reprices its
+#: loyalty programme edits a benefit instead of a service.
+#: (nombre, descripción, servicio, puntos_requeridos, stock)
+BENEFICIOS: tuple[tuple[str, str, str | None, int, int | None], ...] = (
+    (
+        "Lavado básico sin costo",
+        "Canjea tus puntos por un Lavado Express completamente gratis (RN-11).",
+        "Lavado Express",
+        PUNTOS_LAVADO_BASICO,
+        # Unlimited: RN-11 does not ration it, and a stock nobody asked for
+        # would take the benefit out of the listing for reasons of its own.
+        None,
+    ),
 )
 
 #: (nombre, descripción, monto_centimos) - the "adicionales" term of RN-04.
@@ -950,6 +1000,36 @@ def _sembrar_promociones(db: Session) -> None:
     db.flush()
 
 
+def _sembrar_beneficios(db: Session) -> None:
+    """Write RN-11's benefit into ``beneficio`` (RF-032).
+
+    Idempotent by name and NOT refreshed: ``stock`` goes down as customers
+    redeem, and re-running the seed must not silently restock the programme.
+    """
+    servicios = _servicios_por_nombre(db)
+    existentes = {fila.nombre for fila in db.scalars(select(Beneficio)).all()}
+
+    for nombre, descripcion, nombre_servicio, puntos, stock in BENEFICIOS:
+        if nombre in existentes:
+            continue
+        servicio = servicios.get(nombre_servicio) if nombre_servicio else None
+        if nombre_servicio and servicio is None:
+            continue
+        db.add(
+            Beneficio(
+                nombre=nombre,
+                descripcion=descripcion,
+                puntos_requeridos=puntos,
+                servicio_id=servicio.id if servicio else None,
+                stock=stock,
+                vigente_desde=ahora().date(),
+                vigente_hasta=None,
+                activo=True,
+            )
+        )
+    db.flush()
+
+
 def _credenciales_demo(clave: str) -> tuple[str, str]:
     """Read the ``<clave>_correo`` / ``<clave>_password`` pair from settings."""
     return (
@@ -1023,6 +1103,7 @@ def ejecutar_seed(db: Session) -> None:
     _sembrar_adicionales(db)
     _sembrar_paquetes(db)
     _sembrar_promociones(db)
+    _sembrar_beneficios(db)
     usuarios = _sembrar_usuarios(db, roles)
     _sembrar_vehiculo_demo(db, usuarios["cliente"])
     db.commit()

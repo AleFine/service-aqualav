@@ -13,7 +13,7 @@ uses is the same table read the other way round: a channel with no template row
 for that event is simply not used.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
@@ -134,6 +134,16 @@ class Dispositivo(Base):
     )
 
     usuario: Mapped["Usuario"] = relationship("Usuario", lazy="joined")
+
+
+#: RF-030: "barrido de reservas que inician EN DOS HORAS". It lives beside the
+#: table rather than inside one service because TWO of them need it and they
+#: already depend on each other in the other direction: ``recordatorio_service``
+#: sends and answers the reminder, and ``reserva_service`` has to re-arm it when
+#: RF-015 moves the booking the reminder was pointing at. A leaf module is the
+#: one place both can read it from without an import cycle - same reasoning as
+#: ``MAXIMO_BAHIAS`` in ``app/models/bahia.py``.
+VENTANA_RECORDATORIO = timedelta(hours=2)
 
 
 class Recordatorio(Base):

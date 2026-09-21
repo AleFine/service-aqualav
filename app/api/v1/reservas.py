@@ -1,6 +1,8 @@
-"""Reservation endpoints (RF-014, RF-016, RF-017, RF-022)."""
+"""Reservation endpoints (RF-014, RF-015, RF-016, RF-017, RF-022)."""
 
 import math
+from datetime import date
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
@@ -13,6 +15,7 @@ from app.schemas import (
     CancelacionIn,
     ErrorBody,
     Pagina,
+    ReprogramacionIn,
     ReservaCrear,
     ReservaOut,
 )
@@ -56,18 +59,40 @@ def crear(
     summary="Historial de reservas, paginado",
 )
 def listar(
-    estado: str | None = Query(default=None, max_length=30, description="Filtro por estado."),
+    estado: Annotated[
+        list[str] | None,
+        Query(
+            description=(
+                "Filtro por estado. **Repetible**: `?estado=confirmada&estado=en_lavado` "
+                "devuelve la unión de ambos, que es lo que necesitan las pantallas de "
+                "agregado (RF-017 v1.0). Enviado una sola vez se comporta igual que antes."
+            ),
+        ),
+    ] = None,
+    vehiculo_id: int | None = Query(
+        default=None, ge=1, description="Solo las reservas de ese vehículo (RF-017 `CA-02`)."
+    ),
+    desde: date | None = Query(
+        default=None, description="Reservas que inician ese día o después (hora de Lima)."
+    ),
+    hasta: date | None = Query(
+        default=None, description="Reservas que inician ese día o antes (hora de Lima)."
+    ),
     pagina: int = Query(default=1, ge=1),
     tamanio: int = Query(default=TAMANIO_PAGINA_DEFECTO, ge=1, le=TAMANIO_PAGINA_MAXIMO),
     usuario: Usuario = Depends(requiere_algun_permiso(*LECTURA)),
     permisos: list[str] = Depends(permisos_actuales),
     db: Session = Depends(get_db),
 ) -> Pagina[ReservaOut]:
+    """RF-017 y su delta v1.0: filtros por estado (uno o varios), vehículo y rango."""
     items, total, pagina, tamanio = reserva_service.listar(
         db,
         usuario,
         permisos,
-        estado=estado or None,
+        estados=estado,
+        vehiculo_id=vehiculo_id,
+        desde=desde,
+        hasta=hasta,
         pagina=pagina,
         tamanio=tamanio,
     )
@@ -93,6 +118,36 @@ def detalle(
     db: Session = Depends(get_db),
 ) -> ReservaOut:
     reserva = reserva_service.obtener(db, reserva_id, usuario, permisos)
+    return armar_reserva(db, reserva, permisos)
+
+
+@router.post(
+    "/{reserva_id}/reprogramacion",
+    response_model=ReservaOut,
+    responses=RESPUESTAS,
+    summary="Reprogramar una reserva a otro bloque",
+)
+def reprogramar(
+    reserva_id: int,
+    datos: ReprogramacionIn,
+    usuario: Usuario = Depends(requiere_permiso("reserva:reprogramar")),
+    permisos: list[str] = Depends(permisos_actuales),
+    db: Session = Depends(get_db),
+) -> ReservaOut:
+    """RF-015. Libera el bloque anterior, toma el nuevo y avisa al cliente.
+
+    `RN-06`: como máximo **dos** reprogramaciones; la tercera responde `422
+    LIMITE_DE_REPROGRAMACIONES` ofreciendo cancelar y reservar de nuevo
+    (`CA-01`). `2b`: deben faltar **más de dos horas** para el inicio, si no
+    responde `422 REPROGRAMACION_FUERA_DE_PLAZO`.
+
+    El bloque nuevo pasa por las mismas reglas que uno recién creado: `RN-02`
+    (60 minutos de anticipación), `RN-07` con feriados y bloqueos de la agenda,
+    y `RN-03` (una bahía atiende un vehículo a la vez). La tarifa **no** se
+    recalcula: `RF-014 CA-03` la congeló al crear la reserva.
+    """
+    reserva = reserva_service.obtener(db, reserva_id, usuario, permisos)
+    reserva = reserva_service.reprogramar(db, reserva, datos, usuario, permisos)
     return armar_reserva(db, reserva, permisos)
 
 
