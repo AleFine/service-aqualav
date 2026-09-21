@@ -25,14 +25,29 @@ from app.core.errors import (
     detalle,
 )
 from app.core.horario import a_lima, ahora_utc, desde_bd
-from app.models import AsignacionServicio, Bahia, ColaEspera, EstadoCuenta, Reserva, Usuario
+from app.models import (
+    AsignacionServicio,
+    Bahia,
+    ColaEspera,
+    EstadoCuenta,
+    EventoNotificacion,
+    Reserva,
+    Usuario,
+)
 from app.repositories import asignacion as asignacion_repo
 from app.repositories import bahia as bahia_repo
 from app.repositories import reserva as reserva_repo
 from app.repositories import transicion as transicion_repo
 from app.repositories import usuario as usuario_repo
 from app.schemas import AsignacionIn
-from app.services import agenda_service, bahia_service, eventos, operacion_service, reserva_service
+from app.services import (
+    agenda_service,
+    bahia_service,
+    eventos,
+    notificacion_service,
+    operacion_service,
+    reserva_service,
+)
 from app.services.notificador import NOTIFICADOR_PREDETERMINADO, Notificador
 
 #: Permission that lets somebody assign a service (principle P5).
@@ -200,6 +215,7 @@ def asignar(
     permisos: list[str],
     *,
     notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
+    **proveedores,
 ) -> ResultadoAsignacion:
     """Assign a bay and an operator, or queue the service (RF-020).
 
@@ -323,19 +339,32 @@ def asignar(
             "sugerida": sugerida,
         },
         notificador=notificador,
+        **proveedores,
     )
     _depurar_cola(db)
     db.commit()
     db.refresh(reserva)
     db.refresh(asignacion)
 
-    # RF-020 step 5: the operator finds the service in their queue.
-    notificador.notificar(
-        operario.id,
-        "Tienes un servicio asignado",
-        f"La reserva {reserva.codigo} te fue asignada en la {bahia.nombre}.",
-        {"reserva_id": reserva.id, "bahia_id": bahia.id},
+    # RF-020 step 5: the operator finds the service in their queue. It is a
+    # notice like any other now, so it lands in ``notificacion`` with its own
+    # template and its own delivery record instead of only in the log.
+    notificacion_service.despachar(
+        db,
+        operario,
+        EventoNotificacion.ASIGNACION.value,
+        reserva=reserva,
+        momento=momento,
+        **proveedores,
     )
+    db.commit()
+    if notificador is not NOTIFICADOR_PREDETERMINADO:
+        notificador.notificar(
+            operario.id,
+            "Tienes un servicio asignado",
+            f"La reserva {reserva.codigo} te fue asignada en la {bahia.nombre}.",
+            {"reserva_id": reserva.id, "bahia_id": bahia.id},
+        )
     return ResultadoAsignacion(
         reserva=reserva,
         asignacion=asignacion,

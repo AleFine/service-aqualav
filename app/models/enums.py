@@ -128,6 +128,77 @@ ESTADOS_CUENTA_CON_ACCESO: frozenset[str] = frozenset(
 )
 
 
+class CanalNotificacion(str, Enum):
+    """How a notice reaches the customer (RF-029).
+
+    ``en_app`` is the feed the mobile app reads while polling (RF-022); it
+    never fails and it is always written, which is what finally gives
+    ``NotificadorEnApp`` a table behind it. The other two are the simulated
+    providers of the plan's section 4.
+    """
+
+    EN_APP = "en_app"
+    CORREO = "correo"
+    PUSH = "push"
+
+
+class EstadoEnvio(str, Enum):
+    """Outcome of one delivery (RF-029 "registro del resultado del envío")."""
+
+    PENDIENTE = "pendiente"
+    ENVIADA = "enviada"
+    FALLIDA = "fallida"
+
+
+class EventoNotificacion(str, Enum):
+    """The lifecycle moments that are worth telling the customer about.
+
+    RF-029 names six of them literally - "confirmación, recordatorio, inicio,
+    finalización, entrega y cancelación" - and RF-022 flow 4a adds the seventh,
+    the new delivery time when the service runs more than fifteen minutes late.
+
+    This is VOCABULARY, like :class:`EstadoReserva`: which state change raises
+    which event is NOT decided here, it is read from
+    ``transicion_estado.evento_notificacion`` (principle P3). ``asignacion`` and
+    ``estado_cambiado`` are internal notices with no external channel; the
+    template table decides that too.
+    """
+
+    CONFIRMACION = "confirmacion"
+    RECORDATORIO = "recordatorio"
+    INICIO = "inicio"
+    FINALIZACION = "finalizacion"
+    ENTREGA = "entrega"
+    CANCELACION = "cancelacion"
+    RETRASO = "retraso"
+    ASIGNACION = "asignacion"
+    ESTADO_CAMBIADO = "estado_cambiado"
+
+
+class PlataformaDispositivo(str, Enum):
+    """Where a registered push token lives (RF-029 precondition)."""
+
+    ANDROID = "android"
+    IOS = "ios"
+    WEB = "web"
+
+
+class RespuestaRecordatorio(str, Enum):
+    """The three actions RF-030 offers on the two-hour reminder."""
+
+    CONFIRMO = "confirmo"
+    REPROGRAMO = "reprogramo"
+    CANCELO = "cancelo"
+
+
+class EstadoRecordatorio(str, Enum):
+    """Lifecycle of one reminder. ``enviado`` with no answer is flow 3a."""
+
+    PENDIENTE = "pendiente"
+    ENVIADO = "enviado"
+    RESPONDIDO = "respondido"
+
+
 class EstadoBahia(str, Enum):
     """Whether a bay is physically holding a vehicle right now (RF-020 CA-01).
 

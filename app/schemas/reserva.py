@@ -145,6 +145,14 @@ class ReservaOut(BaseModel):
     hora_fin_real: datetime | None = None
     hora_entrega: datetime | None = None
     fin_estimado: datetime
+    # RF-022 v1.0 delta. ``porcentaje_avance`` is the position of the state in
+    # the cycle DERIVED from ``transicion_estado``, so a state added as data
+    # moves the progress bar by itself; ``hora_estimada_entrega`` is
+    # recalculated on every state change and ``minutos_retraso`` is how far it
+    # runs past what the booking promised (flow 4a warns past fifteen).
+    porcentaje_avance: int = 0
+    hora_estimada_entrega: datetime | None = None
+    minutos_retraso: int = 0
     # Written at check-in (RF-019). An internal shop note about the state the
     # vehicle arrived in, so it only reaches a caller holding
     # ``reserva:leer_todas``; a customer never sees it.

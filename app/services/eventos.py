@@ -53,6 +53,10 @@ USUARIO_PASSWORD_RESTABLECIDA = "usuario.password_restablecida"
 USUARIO_SESION_CERRADA = "usuario.sesion_cerrada"
 #: RF-006: the editable part of the profile.
 USUARIO_PERFIL_ACTUALIZADO = "usuario.perfil_actualizado"
+#: RF-029 precondition: the customer authorized push on one device. The token
+#: itself is NOT part of ``datos`` (RNF-014): it is a delivery credential.
+USUARIO_DISPOSITIVO_REGISTRADO = "usuario.dispositivo_registrado"
+USUARIO_DISPOSITIVO_DADO_DE_BAJA = "usuario.dispositivo_dado_de_baja"
 VEHICULO_REGISTRADO = "vehiculo.registrado"
 #: RF-008: edition, logical deletion, and the verification RN-01 asks for.
 VEHICULO_ACTUALIZADO = "vehiculo.actualizado"
@@ -91,6 +95,17 @@ RESERVA_EN_REVISION = "reserva.en_revision"
 #: RF-024 step 4: the delivery opens the rating window. INC-6 (RF-031) reads
 #: this event to decide when the seven calendar days of RN-10 start counting.
 RESERVA_CALIFICACION_HABILITADA = "reserva.calificacion_habilitada"
+#: RF-030: the two-hour reminder and the three answers it admits. Flow 3a -
+#: nobody answered - writes nothing on purpose: the reservation simply stays
+#: confirmed, and the absence of these events IS the record of that.
+RESERVA_RECORDATORIO_ENVIADO = "reserva.recordatorio_enviado"
+RESERVA_ASISTENCIA_CONFIRMADA = "reserva.asistencia_confirmada"
+#: RF-030 + RF-015: the customer asked to move the appointment. INC-7 turns the
+#: intent into the real move; the intent is recorded now so it is not lost.
+RESERVA_REPROGRAMACION_SOLICITADA = "reserva.reprogramacion_solicitada"
+#: RF-020 flow 2a, closed by the scheduler: a queued vehicle got its bay
+#: without the counter having to retry the assignment by hand.
+RESERVA_PROMOVIDA_DE_COLA = "reserva.promovida_de_cola"
 PAGO_REGISTRADO = "pago.registrado"
 #: RF-018 / bay administration.
 BAHIA_CREADA = "bahia.creada"

@@ -22,6 +22,7 @@ from app.models.enums import MONEDA_PREDETERMINADA, ModalidadPago
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.models.asignacion import AsignacionServicio, ColaEspera
     from app.models.bahia import Bahia
+    from app.models.notificacion import Recordatorio
     from app.models.pago import Pago
     from app.models.servicio import Servicio
     from app.models.tarifa import ReservaAdicional, ReservaTarifaDesglose
@@ -90,6 +91,14 @@ class Reserva(Base):
     hora_ingreso: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     hora_fin_real: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     hora_entrega: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: RF-022 v1.0 step 4: the delivery time as it stands NOW, recalculated on
+    #: every state change. It starts as ``fin`` and moves as the service
+    #: advances; comparing it against ``fin`` is what raises the delay notice
+    #: of flow 4a. Stored rather than derived on every read so the recalculation
+    #: happens exactly where something changed, never inside a GET.
+    hora_estimada_entrega: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     creada_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -141,6 +150,14 @@ class Reserva(Base):
         uselist=False,
         lazy="selectin",
     )
+    #: RF-030: the two-hour reminder and the answer it got.
+    recordatorio: Mapped[Optional["Recordatorio"]] = relationship(
+        "Recordatorio",
+        back_populates="reserva",
+        cascade="all, delete-orphan",
+        uselist=False,
+        lazy="selectin",
+    )
     #: RF-012: why ``monto_centimos`` is what it is. Written once, at creation.
     tarifa: Mapped[Optional["ReservaTarifaDesglose"]] = relationship(
         "ReservaTarifaDesglose",
@@ -182,6 +199,12 @@ class TransicionEstado(Base):
     marca_fin_servicio: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    #: EXTENSION POINT P3, the notification half. RF-029 lists six lifecycle
+    #: moments that must reach the customer; WHICH move is each of them is a
+    #: property of the move, so it is a column and not a mapping in a service.
+    #: NULL means the move is internal and only feeds the in-app feed. A state
+    #: inserted as data brings its own notification with it.
+    evento_notificacion: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
 
 class ReservaEstadoHistorial(Base):

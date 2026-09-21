@@ -130,6 +130,28 @@ def listar_en_rango(
     return list(db.scalars(consulta).unique().all())
 
 
+def listar_por_inicio_entre(
+    db: Session, desde: datetime, hasta: datetime, estados_activos: Iterable[str]
+) -> list[Reserva]:
+    """Active reservations STARTING inside ``[desde, hasta]`` (RF-030).
+
+    The reminder sweep is about when the customer is due to arrive, not about
+    which block is busy, so the filter is on ``inicio`` alone. Both ends are
+    inclusive: a reservation at 15:00 swept at exactly 13:00 is in range, which
+    is CA-01 read literally.
+    """
+    consulta = (
+        _completa(select(Reserva))
+        .where(
+            Reserva.estado.in_(set(estados_activos)),
+            Reserva.inicio >= desde,
+            Reserva.inicio <= hasta,
+        )
+        .order_by(Reserva.inicio, Reserva.id)
+    )
+    return list(db.scalars(consulta).unique().all())
+
+
 def listar_activas_de_bahia(
     db: Session,
     bahia_id: int | None,

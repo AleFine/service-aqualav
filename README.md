@@ -125,7 +125,10 @@ trae un valor por defecto que funciona, así que la API arranca sin tocar
 
 | Variable | Valor por defecto | Qué selecciona |
 |---|---|---|
-| `CORREO_PROVEEDOR` | `simulado` | Envío de correo (`RF-035`: la contraseña temporal; `RF-001`/`RF-003`/`RF-006`: verificación y recuperación). `app/services/proveedores/correo.py` registra el mensaje en el log y lo guarda en memoria para poder leerlo en una demo o en una prueba. Un valor desconocido cae en la simulación a propósito. |
+| `CORREO_PROVEEDOR` | `simulado` | Envío de correo (`RF-035`: la contraseña temporal; `RF-001`/`RF-003`/`RF-006`: verificación y recuperación). `app/services/proveedores/correo.py` registra el mensaje en el log y lo guarda en memoria para poder leerlo en una demo o en una prueba, y desde `INC-5` **persiste el envío en `notificacion`** cuando el despachador de `RF-029` lo construye ligado a la fila. Un valor desconocido cae en la simulación a propósito. |
+| `PUSH_PROVEEDOR` | `simulado` | Envío de push (`RF-029`, `RF-030`, `RF-022 4a`). `app/services/proveedores/push.py` sigue el mismo patrón y **rechaza de forma determinista un token que no esté en `dispositivo`**, que es lo que ejercita los reintentos sin red. |
+| `PLANIFICADOR_HABILITADO` | `true` | El bucle de fondo que barre los recordatorios de `RF-030` y promueve la cola de espera de `RF-020`. Apagarlo no es un modo degradado: el mismo barrido es una función pura invocable por `POST /api/v1/interno/planificador`. **La suite lo apaga** (`tests/conftest.py`) para que ninguna prueba dependa del reloj real. |
+| `PLANIFICADOR_INTERVALO_SEGUNDOS` | `300` | Cada cuánto barre el bucle de fondo. |
 
 Y estas tres, que no seleccionan un proveedor sino que afinan reglas de
 `INC-3`:
@@ -292,6 +295,12 @@ Todo cuelga de `/api/v1`. La autenticación es `Authorization: Bearer <access>`.
 | `POST` | `/reservas/{id}/revision` | `reserva:revisar` | RF-024 `3a` | 200 · **422** |
 | `POST` | `/reservas/{id}/check-out` | `reserva:check_out` | RF-024 | 200 · **422** |
 | `POST` | `/reservas/{id}/pagos` | `pago:registrar` | RF-026 | **201 / 200** · 400 · 422 |
+| `POST` | `/reservas/{id}/recordatorio` | `reserva:leer_propias` o `reserva:leer_todas` | RF-030 | 200 · 403 · **404** · 422 |
+| `GET` | `/notificaciones?limite=` | autenticado | RF-029, RF-022 | 200 · 401 |
+| `GET` | `/notificaciones/dispositivos` | autenticado | RF-029 | 200 · 401 |
+| `POST` | `/notificaciones/dispositivos` | autenticado | RF-029 | 201 · 401 · 422 |
+| `DELETE` | `/notificaciones/dispositivos/{id}` | autenticado | RF-029 | 204 · **404** |
+| `POST` | `/interno/planificador` | `planificador:ejecutar` | RF-030, RF-020 `2a` | 200 · 401 · 403 |
 | `GET` | `/api/v1/health` | público | RNF-010 | 200 |
 
 **La autorización es siempre por permiso, nunca por nombre de rol** (principio
@@ -458,13 +467,15 @@ app/
   services/                auth · rol · usuario · vehiculo · servicio · bahia
                            disponibilidad · agenda · asignacion · reserva
                            operacion · pago · tarifa · promocion · eventos
-                           notificador · politica_cancelacion · ensamblador
-                           proveedores/ (correo simulado)
+                           notificacion · recordatorio · seguimiento
+                           planificador · notificador · politica_cancelacion
+                           ensamblador
+                           proveedores/ (correo y push simulados)
   api/v1/                  auth · vehiculos · servicios · catalogo
                            admin_servicios · admin_tarifas · admin_roles
                            admin_usuarios · admin_bahias · agenda
                            disponibilidad · reservas · operacion · asignacion
-                           pagos · estados · health
+                           pagos · estados · notificaciones · interno · health
   seed.py                  carga inicial idempotente
 migrations/                Alembic
 tests/                     pytest sobre SQLite en memoria

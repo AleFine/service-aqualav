@@ -20,7 +20,7 @@ from app.core.errors import (
     detalle,
 )
 from app.core.horario import a_lima, a_utc, ahora, ahora_utc, dentro_de_horario, desde_bd
-from app.models import EstadoReserva, ModalidadPago, Reserva, Usuario
+from app.models import EstadoReserva, EventoNotificacion, ModalidadPago, Reserva, Usuario
 from app.repositories import bahia as bahia_repo
 from app.repositories import reserva as reserva_repo
 from app.repositories import transicion as transicion_repo
@@ -36,6 +36,7 @@ from app.schemas import (
 from app.services import (
     agenda_service,
     eventos,
+    notificacion_service,
     operacion_service,
     servicio_service,
     tarifa_service,
@@ -79,6 +80,7 @@ def crear(
     datos: ReservaCrear,
     *,
     notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
+    **proveedores,
 ) -> Reserva:
     """Confirm a reservation (RF-014).
 
@@ -249,15 +251,32 @@ def crear(
         autor_id=usuario.id,
     )
 
+    # RF-022: the delivery time starts as the one the booking promised, and
+    # every state change recalculates it from there.
+    reserva.hora_estimada_entrega = fin_utc
+
+    # RF-029: "confirmación" is one of the six lifecycle events, and it is the
+    # one that is NOT a transition - creating a reservation has no origin state
+    # to declare - so it is dispatched here instead of from the table.
+    notificacion_service.despachar(
+        db,
+        usuario,
+        EventoNotificacion.CONFIRMACION.value,
+        reserva=reserva,
+        momento=ahora_utc(),
+        **proveedores,
+    )
+
     db.commit()
     db.refresh(reserva)
 
-    notificador.notificar(
-        usuario.id,
-        "Reserva confirmada",
-        f"Tu reserva {reserva.codigo} quedó confirmada para el {inicio_lima.isoformat()}.",
-        {"reserva_id": reserva.id, "codigo": reserva.codigo},
-    )
+    if notificador is not NOTIFICADOR_PREDETERMINADO:
+        notificador.notificar(
+            usuario.id,
+            "Reserva confirmada",
+            f"Tu reserva {reserva.codigo} quedó confirmada para el {inicio_lima.isoformat()}.",
+            {"reserva_id": reserva.id, "codigo": reserva.codigo},
+        )
     return reserva
 
 
@@ -287,6 +306,7 @@ def atencion_inmediata(
     permisos: list[str],
     *,
     notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
+    **proveedores,
 ) -> Reserva:
     """Serve a customer who arrived without booking (RF-019 flow 1a).
 
@@ -368,6 +388,7 @@ def atencion_inmediata(
         atencion_sin_reserva=True,
     )
     tarifa_service.congelar(db, reserva, desglose)
+    reserva.hora_estimada_entrega = fin_utc
     reserva_repo.agregar_historial(
         db,
         reserva_id=reserva.id,
@@ -414,6 +435,7 @@ def atencion_inmediata(
         autor,
         permisos,
         notificador=notificador,
+        **proveedores,
     )
 
 
@@ -461,6 +483,7 @@ def cancelar(
     *,
     politica: PoliticaCancelacion = POLITICA_PREDETERMINADA,
     notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
+    **proveedores,
 ) -> tuple[Reserva, Dinero]:
     """Cancel a reservation and free its block (RF-016).
 
@@ -490,6 +513,7 @@ def cancelar(
         datos={"motivo": motivo_limpio, "penalidad_centimos": penalidad.monto_centimos},
         notificador=notificador,
         confirmar=False,
+        **proveedores,
     )
 
     # RF-016 CA-03: the reason, the author and the moment stay on the record.

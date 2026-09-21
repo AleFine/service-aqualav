@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     # ``.env`` at all; only "simulado" exists today and it never uses the
     # network. An unknown value falls back to the simulation on purpose.
     correo_proveedor: str = "simulado"
+    # RF-029: the push provider. Same registry pattern as the mail one; the
+    # simulation refuses a token that is not in ``dispositivo``.
+    push_proveedor: str = "simulado"
+
+    # RF-030 / plan section 4: the background sweep. It ships ON because a
+    # reminder nobody runs is not a reminder, and it is switchable because the
+    # sweep is always reachable through ``POST /interno/planificador`` - which
+    # is how the test suite runs it, with the loop off.
+    planificador_habilitado: bool = True
+    planificador_intervalo_segundos: int = 300
 
     # --- Seed ------------------------------------------------------------
     seed_enabled: bool = True

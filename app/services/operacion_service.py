@@ -30,12 +30,12 @@ from app.core.errors import (
     detalle,
 )
 from app.core.horario import a_lima, ahora, ahora_utc, desde_bd
-from app.models import EstadoReserva, Reserva, TransicionEstado, Usuario
+from app.models import EstadoReserva, EventoNotificacion, Reserva, TransicionEstado, Usuario
 from app.repositories import pago as pago_repo
 from app.repositories import reserva as reserva_repo
 from app.repositories import transicion as transicion_repo
 from app.schemas import CheckInIn, CheckOutIn, RevisionIn
-from app.services import bahia_service, eventos
+from app.services import bahia_service, eventos, notificacion_service, seguimiento_service
 from app.services.notificador import NOTIFICADOR_PREDETERMINADO, Notificador
 
 #: RF-019 flow 3a: past this delay the check-in needs an explicit confirmation.
@@ -217,11 +217,16 @@ def cambiar_estado(
     datos: dict[str, Any] | None = None,
     notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
     confirmar: bool = True,
+    **proveedores,
 ) -> Reserva:
     """Move a reservation to ``destino``, validating against the table.
 
     ``origen_llamada`` names the operation performing the move; it defaults to
     the generic endpoint. See :func:`validar_transicion` for what is checked.
+
+    ``proveedores`` is forwarded verbatim to ``notificacion_service.despachar``
+    (``correo``, ``push``, ``en_app``, ``espera``) so a test can make a channel
+    fail without every caller in between having to know about it.
     """
     destino = _normalizar(destino)
     origen = reserva.estado
@@ -260,16 +265,39 @@ def cambiar_estado(
         datos=cuerpo_evento,
     )
 
+    # RF-022 step 4: the delivery time is recalculated HERE, where something
+    # actually changed, and warns the customer when it slips past fifteen
+    # minutes (flow 4a). Before the lifecycle notice so the message that goes
+    # out already carries the new time.
+    seguimiento_service.actualizar_estimado(db, reserva, momento=momento, **proveedores)
+
+    # RF-029: which lifecycle event this move raises is declared in the table
+    # (``transicion_estado.evento_notificacion``), never decided here. A move
+    # that declares none is internal and only reaches the in-app feed.
+    evento = transicion.evento_notificacion or EventoNotificacion.ESTADO_CAMBIADO.value
+    notificacion_service.despachar(
+        db,
+        reserva.usuario,
+        evento,
+        reserva=reserva,
+        datos={"estado_origen": origen, "estado_destino": destino},
+        momento=momento,
+        **proveedores,
+    )
+
     if confirmar:
         db.commit()
         db.refresh(reserva)
 
-    notificador.notificar(
-        reserva.usuario_id,
-        "Tu reserva cambió de estado",
-        f"La reserva {reserva.codigo} ahora está en estado «{destino}».",
-        {"reserva_id": reserva.id, "estado": destino},
-    )
+    # P8 is still honoured: a caller may inject its own notifier and it is
+    # still told, in addition to the persisted channels above.
+    if notificador is not NOTIFICADOR_PREDETERMINADO:
+        notificador.notificar(
+            reserva.usuario_id,
+            "Tu reserva cambió de estado",
+            f"La reserva {reserva.codigo} ahora está en estado «{destino}».",
+            {"reserva_id": reserva.id, "estado": destino},
+        )
     return reserva
 
 
@@ -328,6 +356,7 @@ def check_in(
     permisos: list[str],
     *,
     notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
+    **proveedores,
 ) -> Reserva:
     """Register the vehicle entering the shop (RF-019).
 
@@ -374,6 +403,7 @@ def check_in(
         accion=eventos.RESERVA_CHECK_IN,
         datos={"minutos_retraso": retraso, "confirmar_retraso": bool(datos.confirmar_retraso)},
         notificador=notificador,
+        **proveedores,
     )
 
 
@@ -385,6 +415,7 @@ def check_out(
     permisos: list[str],
     *,
     notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
+    **proveedores,
 ) -> Reserva:
     """Hand the vehicle back to the customer (RF-024).
 
@@ -440,6 +471,7 @@ def check_out(
         accion=eventos.RESERVA_CHECK_OUT,
         datos={"conformidad_cliente": bool(datos.conformidad_cliente)},
         notificador=notificador,
+        **proveedores,
     )
 
 
@@ -451,6 +483,7 @@ def enviar_a_revision(
     permisos: list[str],
     *,
     notificador: Notificador = NOTIFICADOR_PREDETERMINADO,
+    **proveedores,
 ) -> Reserva:
     """Register what the customer objected to and send the service back (RF-024 3a).
 
@@ -485,4 +518,5 @@ def enviar_a_revision(
         accion=eventos.RESERVA_EN_REVISION,
         datos={"observacion": reserva.observacion_revision},
         notificador=notificador,
+        **proveedores,
     )

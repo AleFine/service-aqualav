@@ -49,6 +49,15 @@ from app.schemas.common import (
 )
 from app.schemas.disponibilidad import BloqueDisponible, DisponibilidadOut
 from app.schemas.estado import EstadoCatalogoOut
+from app.schemas.notificacion import (
+    DispositivoIn,
+    DispositivoOut,
+    NotificacionOut,
+    PlanificadorOut,
+    RecordatorioOut,
+    RecordatorioRespuestaIn,
+    RespuestaRecordatorioOut,
+)
 from app.schemas.pago import PagoCrear, PagoOut
 from app.schemas.reserva import (
     AtencionInmediataIn,
@@ -137,6 +146,8 @@ __all__ = [
     "DiaNoLaborableOut",
     "Dinero",
     "DisponibilidadOut",
+    "DispositivoIn",
+    "DispositivoOut",
     "ErrorBody",
     "EstadoCatalogoOut",
     "FactorIn",
@@ -148,6 +159,7 @@ __all__ = [
     "LoginIn",
     "LogoutIn",
     "MensajeOut",
+    "NotificacionOut",
     "Pagina",
     "PagoCrear",
     "PagoOut",
@@ -159,16 +171,20 @@ __all__ = [
     "PerfilActualizar",
     "PerfilOut",
     "PermisoOut",
+    "PlanificadorOut",
     "PromocionActualizar",
     "PromocionIn",
     "PromocionOut",
     "PromocionResumen",
+    "RecordatorioOut",
+    "RecordatorioRespuestaIn",
     "RecuperacionIn",
     "ReenvioVerificacionIn",
     "RefreshIn",
     "RegistroIn",
     "ReservaCrear",
     "ReservaOut",
+    "RespuestaRecordatorioOut",
     "RestablecerPasswordIn",
     "ResultadoAsignacionOut",
     "RevisionIn",

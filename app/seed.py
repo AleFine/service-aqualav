@@ -20,14 +20,18 @@ from app.core.security import hash_password
 from app.database import SessionLocal
 from app.models import (
     Bahia,
+    CanalNotificacion,
     EstadoBahia,
     EstadoCuenta,
     EstadoReserva,
+    EventoNotificacion,
     FactorTipoVehiculo,
     HorarioAtencion,
+    Idioma,
     Paquete,
     PaqueteServicio,
     Permiso,
+    PlantillaNotificacion,
     Promocion,
     Rol,
     Servicio,
@@ -70,6 +74,7 @@ PERMISOS: dict[str, str] = {
     "usuario:administrar": "Crear, editar, activar y desactivar usuarios internos.",
     "rol:administrar": "Consultar roles y permisos y asignar el rol de un usuario.",
     "bahia:administrar": "Crear, editar y desactivar bahías.",
+    "planificador:ejecutar": "Forzar el barrido de recordatorios y de la cola de espera.",
     "promocion:administrar": "Crear, editar y desactivar paquetes y promociones.",
 }
 
@@ -154,7 +159,7 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
 #: The remaining fourteen are rows, and every state of Annex A appears in at
 #: least one of them, which is what makes the catalogue of ``GET /estados``
 #: complete without a list of states anywhere in the code.
-TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
+TRANSICIONES: tuple[tuple[str, str, str, str | None, bool, str | None], ...] = (
     # 3. The gateway approves the online payment (RF-026). INC-4 implements the
     #    owning operation; the row already refuses every other door.
     (
@@ -163,6 +168,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "pago:registrar",
         "pago",
         False,
+        EventoNotificacion.CONFIRMACION.value,
     ),
     # 4. The fifteen minute window expires, or the customer cancels (RF-016).
     (
@@ -171,6 +177,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:cancelar",
         "cancelacion",
         False,
+        EventoNotificacion.CANCELACION.value,
     ),
     # 5. Check-in (RF-019). v1.0 lands on "en recepción", not on "en atención".
     (
@@ -179,6 +186,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:check_in",
         "check_in",
         False,
+        None,
     ),
     # 6. Cancellation before the vehicle arrives (RF-016).
     (
@@ -187,6 +195,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:cancelar",
         "cancelacion",
         False,
+        EventoNotificacion.CANCELACION.value,
     ),
     # 7. Bay and operator assignment (RF-020). INC-1B implements the operation.
     (
@@ -195,6 +204,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:asignar",
         "asignacion",
         False,
+        None,
     ),
     # 8. v1.0 allows cancelling after the check-in; the MVP did not (RF-016).
     (
@@ -203,6 +213,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:cancelar",
         "cancelacion",
         False,
+        EventoNotificacion.CANCELACION.value,
     ),
     # 9-12. The operator walks the service through the bay (RF-021). No owning
     #       operation: these are exactly what the generic endpoint is for.
@@ -212,6 +223,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:avanzar_estado",
         None,
         False,
+        EventoNotificacion.INICIO.value,
     ),
     (
         EstadoReserva.EN_LAVADO.value,
@@ -219,6 +231,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:avanzar_estado",
         None,
         False,
+        None,
     ),
     (
         EstadoReserva.SECADO.value,
@@ -226,6 +239,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:avanzar_estado",
         None,
         False,
+        None,
     ),
     # 12. Finishing the service is what stamps ``hora_fin_real`` and unlocks
     #     the charge (RF-022 CA-02, RN-09): the flag moved here from
@@ -236,6 +250,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:avanzar_estado",
         None,
         True,
+        EventoNotificacion.FINALIZACION.value,
     ),
     # 13. Check-out (RF-024).
     (
@@ -244,6 +259,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:check_out",
         "check_out",
         False,
+        EventoNotificacion.ENTREGA.value,
     ),
     # 14. The customer objects to the result (RF-024 flow 3a). Its own owner so
     #     the check-out never has two destinations to choose from; INC-1B wires
@@ -254,6 +270,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:revisar",
         "revision",
         False,
+        None,
     ),
     # 15. The operator reworks the vehicle (RF-021).
     (
@@ -262,6 +279,7 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:avanzar_estado",
         None,
         False,
+        None,
     ),
     # 16. The customer accepts after the review and takes the vehicle (RF-024).
     (
@@ -270,8 +288,162 @@ TRANSICIONES: tuple[tuple[str, str, str, str | None, bool], ...] = (
         "reserva:check_out",
         "check_out",
         False,
+        EventoNotificacion.ENTREGA.value,
     ),
 )
+
+#: EXTENSION POINT, the notification half of P3. ``plantilla_notificacion``
+#: holds the TEXT of every notice, so no service ever concatenates a message:
+#: RF-029 asks for it to be composed "según plantilla del evento y el idioma",
+#: and this table is that sentence made into rows.
+#:
+#: The table decides the CHANNELS too. A channel with no row for an event is
+#: simply not used, which is why finishing a service also mails and pushes
+#: while an intermediate bay move only lands in the in-app feed. Turning a
+#: channel on for an event, or translating the shop into a third language, is
+#: an INSERT.
+#:
+#: The bodies are ``str.format`` templates over the reservation's own data:
+#: ``{codigo}``, ``{servicio}``, ``{placa}``, ``{bahia}``, ``{inicio}``,
+#: ``{fin}``, ``{entrega}``, ``{estado}``, ``{cliente}``, plus whatever the
+#: event adds (``{minutos_retraso}``, ``{acciones}``, ``{hora}``). A
+#: placeholder nobody filled in renders as empty text, never as an error.
+
+#: evento -> canales que lo publican.
+CANALES_POR_EVENTO: dict[str, tuple[str, ...]] = {
+    # The six lifecycle events of RF-029 go out on push AND mail.
+    EventoNotificacion.CONFIRMACION.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+        CanalNotificacion.PUSH.value,
+    ),
+    EventoNotificacion.RECORDATORIO.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+        CanalNotificacion.PUSH.value,
+    ),
+    EventoNotificacion.INICIO.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+        CanalNotificacion.PUSH.value,
+    ),
+    EventoNotificacion.FINALIZACION.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+        CanalNotificacion.PUSH.value,
+    ),
+    EventoNotificacion.ENTREGA.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+        CanalNotificacion.PUSH.value,
+    ),
+    EventoNotificacion.CANCELACION.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.CORREO.value,
+        CanalNotificacion.PUSH.value,
+    ),
+    # RF-022 flow 4a: the new delivery time. Push is the channel the SRS names.
+    EventoNotificacion.RETRASO.value: (
+        CanalNotificacion.EN_APP.value,
+        CanalNotificacion.PUSH.value,
+    ),
+    # Internal notices: they belong in the app, not in somebody's inbox.
+    EventoNotificacion.ASIGNACION.value: (CanalNotificacion.EN_APP.value,),
+    EventoNotificacion.ESTADO_CAMBIADO.value: (CanalNotificacion.EN_APP.value,),
+}
+
+#: (evento, idioma) -> (asunto, cuerpo).
+TEXTOS: dict[tuple[str, str], tuple[str, str]] = {
+    (EventoNotificacion.CONFIRMACION.value, Idioma.ES.value): (
+        "Reserva {codigo} confirmada",
+        "Hola {cliente}: tu reserva {codigo} para «{servicio}» quedó confirmada "
+        "para el {inicio}. Te esperamos con el vehículo {placa}.",
+    ),
+    (EventoNotificacion.CONFIRMACION.value, Idioma.EN.value): (
+        "Booking {codigo} confirmed",
+        "Hi {cliente}: your booking {codigo} for «{servicio}» is confirmed for "
+        "{inicio}. We are expecting vehicle {placa}.",
+    ),
+    (EventoNotificacion.RECORDATORIO.value, Idioma.ES.value): (
+        "Tu reserva {codigo} empieza en dos horas",
+        "Hola {cliente}: tu reserva {codigo} para «{servicio}» empieza a las "
+        "{hora}. Puedes confirmar tu asistencia, reprogramarla o cancelarla "
+        "desde la aplicación ({acciones}). Si no respondes, la mantenemos.",
+    ),
+    (EventoNotificacion.RECORDATORIO.value, Idioma.EN.value): (
+        "Your booking {codigo} starts in two hours",
+        "Hi {cliente}: your booking {codigo} for «{servicio}» starts at {hora}. "
+        "You can confirm, reschedule or cancel it from the app ({acciones}). "
+        "If you do nothing, we keep it as it is.",
+    ),
+    (EventoNotificacion.INICIO.value, Idioma.ES.value): (
+        "Empezamos con tu vehículo {placa}",
+        "Ya estamos trabajando en «{servicio}» para el vehículo {placa} en la "
+        "{bahia}. Calculamos entregarlo a las {entrega}.",
+    ),
+    (EventoNotificacion.INICIO.value, Idioma.EN.value): (
+        "We started working on {placa}",
+        "We are now working on «{servicio}» for vehicle {placa} in {bahia}. "
+        "We expect to hand it back at {entrega}.",
+    ),
+    (EventoNotificacion.FINALIZACION.value, Idioma.ES.value): (
+        "Tu vehículo {placa} está listo",
+        "Terminamos «{servicio}» para el vehículo {placa}. Puedes recogerlo "
+        "cuando quieras; la reserva {codigo} queda a la espera de la entrega.",
+    ),
+    (EventoNotificacion.FINALIZACION.value, Idioma.EN.value): (
+        "Your vehicle {placa} is ready",
+        "We finished «{servicio}» for vehicle {placa}. You can pick it up "
+        "whenever you like; booking {codigo} is now awaiting hand-over.",
+    ),
+    (EventoNotificacion.ENTREGA.value, Idioma.ES.value): (
+        "Entregamos tu vehículo {placa}",
+        "Gracias por confiar en AquaLav. La reserva {codigo} quedó entregada. "
+        "Cualquier observación, escríbenos desde la aplicación.",
+    ),
+    (EventoNotificacion.ENTREGA.value, Idioma.EN.value): (
+        "Vehicle {placa} handed back",
+        "Thank you for choosing AquaLav. Booking {codigo} has been handed back. "
+        "Let us know through the app if anything is not right.",
+    ),
+    (EventoNotificacion.CANCELACION.value, Idioma.ES.value): (
+        "Reserva {codigo} cancelada",
+        "Tu reserva {codigo} para «{servicio}» del {inicio} quedó cancelada. "
+        "Puedes reservar otro bloque cuando quieras desde la aplicación.",
+    ),
+    (EventoNotificacion.CANCELACION.value, Idioma.EN.value): (
+        "Booking {codigo} cancelled",
+        "Your booking {codigo} for «{servicio}» on {inicio} has been cancelled. "
+        "You can book another slot from the app whenever you like.",
+    ),
+    (EventoNotificacion.RETRASO.value, Idioma.ES.value): (
+        "Nueva hora de entrega de tu vehículo {placa}",
+        "Tu servicio «{servicio}» va con {minutos_retraso} minutos de retraso. "
+        "La nueva hora estimada de entrega es {entrega}. Disculpa la demora.",
+    ),
+    (EventoNotificacion.RETRASO.value, Idioma.EN.value): (
+        "New hand-over time for vehicle {placa}",
+        "Your «{servicio}» service is running {minutos_retraso} minutes late. "
+        "The new estimated hand-over time is {entrega}. Sorry for the delay.",
+    ),
+    (EventoNotificacion.ASIGNACION.value, Idioma.ES.value): (
+        "Tienes un servicio asignado en la {bahia}",
+        "La reserva {codigo} («{servicio}», vehículo {placa}) te fue asignada " "en la {bahia}.",
+    ),
+    (EventoNotificacion.ASIGNACION.value, Idioma.EN.value): (
+        "A service was assigned to you in {bahia}",
+        "Booking {codigo} («{servicio}», vehicle {placa}) was assigned to you " "in {bahia}.",
+    ),
+    (EventoNotificacion.ESTADO_CAMBIADO.value, Idioma.ES.value): (
+        "Tu reserva {codigo} avanzó",
+        "La reserva {codigo} está ahora en «{estado}». Entrega estimada: " "{entrega}.",
+    ),
+    (EventoNotificacion.ESTADO_CAMBIADO.value, Idioma.EN.value): (
+        "Your booking {codigo} moved on",
+        "Booking {codigo} is now in «{estado}». Estimated hand-over: {entrega}.",
+    ),
+}
+
 
 #: Four bays, the physical limit of the shop (RE-07).
 BAHIAS: tuple[str, ...] = ("Bahía 1", "Bahía 2", "Bahía 3", "Bahía 4")
@@ -458,12 +630,19 @@ def _sembrar_roles(db: Session, permisos: dict[str, Permiso]) -> dict[str, Rol]:
 
 
 def _sembrar_transiciones(db: Session) -> None:
+    """Insert the declared moves, and keep their notification event in sync.
+
+    The event is the only column the seed UPDATES on an existing row. It has to
+    be: a shop that upgraded from INC-1A has the fourteen moves already, and
+    without this they would all stay silent (RF-029).
+    """
     existentes = {
-        (transicion.estado_origen, transicion.estado_destino)
+        (transicion.estado_origen, transicion.estado_destino): transicion
         for transicion in db.scalars(select(TransicionEstado)).all()
     }
-    for origen, destino, permiso, endpoint, marca_fin in TRANSICIONES:
-        if (origen, destino) not in existentes:
+    for origen, destino, permiso, endpoint, marca_fin, evento in TRANSICIONES:
+        transicion = existentes.get((origen, destino))
+        if transicion is None:
             db.add(
                 TransicionEstado(
                     estado_origen=origen,
@@ -471,8 +650,42 @@ def _sembrar_transiciones(db: Session) -> None:
                     permiso_requerido=permiso,
                     endpoint=endpoint,
                     marca_fin_servicio=marca_fin,
+                    evento_notificacion=evento,
                 )
             )
+        else:
+            transicion.evento_notificacion = evento
+    db.flush()
+
+
+def _sembrar_plantillas(db: Session) -> None:
+    """Write the notification texts (RF-029).
+
+    Idempotent by ``(evento, canal, idioma)``, and the text of an existing row
+    is REFRESHED: the catalogue in this module is the shop's default wording,
+    and a demo that edited a row by hand gets it back by re-running the seed.
+    """
+    existentes = {
+        (fila.evento, fila.canal, fila.idioma): fila
+        for fila in db.scalars(select(PlantillaNotificacion)).all()
+    }
+
+    for (evento, idioma), (asunto, cuerpo) in TEXTOS.items():
+        for canal in CANALES_POR_EVENTO.get(evento, ()):
+            fila = existentes.get((evento, canal, idioma))
+            if fila is None:
+                db.add(
+                    PlantillaNotificacion(
+                        evento=evento,
+                        canal=canal,
+                        idioma=idioma,
+                        asunto=asunto,
+                        cuerpo=cuerpo,
+                    )
+                )
+            else:
+                fila.asunto = asunto
+                fila.cuerpo = cuerpo
     db.flush()
 
 
@@ -709,6 +922,7 @@ def ejecutar_seed(db: Session) -> None:
     permisos = _sembrar_permisos(db)
     roles = _sembrar_roles(db, permisos)
     _sembrar_transiciones(db)
+    _sembrar_plantillas(db)
     _sembrar_bahias(db)
     _sembrar_horarios(db)
     _sembrar_servicios(db)

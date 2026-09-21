@@ -1,16 +1,29 @@
-"""Notification port and its single MVP implementation (EXTENSION POINT P8).
+"""Notification port and its in-app implementation (EXTENSION POINT P8).
 
-RF-022 is served by polling in the MVP, so there is nothing to push yet. The
-port exists anyway because the moment RF-029 lands in v0.2, adding push is
-registering a second implementation of :class:`Notificador` - the reservation
-and operation services keep calling ``notificar`` exactly where they do today.
+The MVP left this as a stub on purpose: it only wrote to the application log,
+because there was no notifications table and inventing one would have meant
+guessing at v0.2's schema. INC-5 brings the schema, so the stub is closed:
+``NotificadorEnApp`` now persists what it delivered.
 
-The MVP implementation only writes to the application log: there is no
-notifications table, and building one now would be guessing at v0.2's schema.
+The PORT did not change. ``notificar(usuario_id, asunto, cuerpo, datos)`` is
+still the whole contract, and persistence is a property of the instance - a
+notifier built by :func:`notificador_en_app` with a session and a
+``notificacion`` row records the delivery against it. That is why the in-app
+channel can sit beside mail and push inside the same retry loop of
+``notificacion_service`` without a special case.
+
+The in-app channel is the one that never fails: the customer is not reached
+over a network, the row IS the delivery, and the mobile app reads it while
+polling (RF-022).
 """
 
 import logging
 from typing import Any, Protocol, runtime_checkable
+
+from sqlalchemy.orm import Session
+
+from app.models import Notificacion
+from app.services.proveedores.registro import anotar
 
 logger = logging.getLogger("aqualav.notificador")
 
@@ -37,8 +50,16 @@ class NotificadorEnApp:
     to roll back the business transaction that produced it.
     """
 
-    def __init__(self, registro: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        registro: logging.Logger | None = None,
+        *,
+        sesion: Session | None = None,
+        notificacion: Notificacion | None = None,
+    ) -> None:
         self._registro = registro or logger
+        self._sesion = sesion
+        self._notificacion = notificacion
 
     def notificar(
         self,
@@ -47,6 +68,7 @@ class NotificadorEnApp:
         cuerpo: str,
         datos: dict[str, Any] | None = None,
     ) -> None:
+        anotar(self._sesion, self._notificacion)
         try:
             self._registro.info(
                 "notificacion usuario=%s asunto=%s cuerpo=%s datos=%s",
@@ -59,6 +81,14 @@ class NotificadorEnApp:
             pass
 
 
-#: Default instance injected by the services. Tests replace it with a spy and
-#: v0.2 replaces it with a composite that also pushes.
+def notificador_en_app(
+    *,
+    sesion: Session | None = None,
+    notificacion: Notificacion | None = None,
+) -> Notificador:
+    """Build the in-app notifier, optionally bound to the row it delivers to."""
+    return NotificadorEnApp(sesion=sesion, notificacion=notificacion)
+
+
+#: Default instance injected by the services. Tests replace it with a spy.
 NOTIFICADOR_PREDETERMINADO: Notificador = NotificadorEnApp()

@@ -13,6 +13,11 @@ from datetime import date, datetime, time, timedelta
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "clave-solo-para-pruebas")
 os.environ.setdefault("CORS_ORIGINS", "*")
+# RF-030 / plan section 4: the scheduler's background loop stays OFF in the
+# suite. Nothing here may depend on wall-clock time, so every test that needs a
+# sweep calls ``planificador.ejecutar_pendientes(db, momento=...)`` with the
+# instant it wants to pretend it is.
+os.environ.setdefault("PLANIFICADOR_HABILITADO", "false")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

@@ -9,7 +9,7 @@ paths are matched before ``/reservas/{reserva_id}``.
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.deps import get_db, permisos_actuales, requiere_permiso
+from app.deps import get_db, permisos_actuales, requiere_algun_permiso, requiere_permiso
 from app.models import Usuario
 from app.schemas import (
     AtencionInmediataIn,
@@ -18,11 +18,13 @@ from app.schemas import (
     CheckOutIn,
     ErrorBody,
     Lista,
+    RecordatorioRespuestaIn,
     ReservaOut,
+    RespuestaRecordatorioOut,
     RevisionIn,
 )
-from app.services import operacion_service, reserva_service
-from app.services.ensamblador import armar_reserva, armar_reservas
+from app.services import operacion_service, recordatorio_service, reserva_service
+from app.services.ensamblador import armar_recordatorio, armar_reserva, armar_reservas
 
 router = APIRouter(prefix="/reservas", tags=["operación"])
 
@@ -140,3 +142,25 @@ def check_out(
     reserva = reserva_service.obtener(db, reserva_id, autor, permisos)
     reserva = operacion_service.check_out(db, reserva, datos, autor, permisos)
     return armar_reserva(db, reserva, permisos)
+
+
+@router.post(
+    "/{reserva_id}/recordatorio",
+    response_model=RespuestaRecordatorioOut,
+    responses=RESPUESTAS,
+    summary="Responder al recordatorio: confirmar asistencia, reprogramar o cancelar",
+)
+def responder_recordatorio(
+    reserva_id: int,
+    datos: RecordatorioRespuestaIn,
+    autor: Usuario = Depends(requiere_algun_permiso("reserva:leer_propias", "reserva:leer_todas")),
+    permisos: list[str] = Depends(permisos_actuales),
+    db: Session = Depends(get_db),
+) -> RespuestaRecordatorioOut:
+    """RF-030. Cancelar exige además ``reserva:cancelar``: la valida la transición."""
+    reserva = reserva_service.obtener(db, reserva_id, autor, permisos)
+    reserva, recordatorio = recordatorio_service.responder(db, reserva, datos, autor, permisos)
+    return RespuestaRecordatorioOut(
+        reserva=armar_reserva(db, reserva, permisos),
+        recordatorio=armar_recordatorio(recordatorio),
+    )

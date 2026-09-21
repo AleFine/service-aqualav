@@ -13,12 +13,15 @@ from app.models import (
     Bahia,
     ColaEspera,
     DiaNoLaborable,
+    Dispositivo,
     EstadoPago,
     FactorTipoVehiculo,
+    Notificacion,
     Pago,
     Paquete,
     Permiso,
     Promocion,
+    Recordatorio,
     Reserva,
     ReservaTarifaDesglose,
     Rol,
@@ -38,14 +41,17 @@ from app.schemas import (
     DesgloseOut,
     DiaNoLaborableOut,
     Dinero,
+    DispositivoOut,
     FactorOut,
     HistorialItem,
+    NotificacionOut,
     PagoOut,
     PaqueteLineaOut,
     PaqueteOut,
     PermisoOut,
     PromocionOut,
     PromocionResumen,
+    RecordatorioOut,
     ReservaOut,
     ResultadoAsignacionOut,
     RolOut,
@@ -55,7 +61,12 @@ from app.schemas import (
     UsuarioOut,
     VehiculoResumen,
 )
-from app.services import operacion_service, reserva_service, tarifa_service
+from app.services import (
+    operacion_service,
+    reserva_service,
+    seguimiento_service,
+    tarifa_service,
+)
 from app.services.tarifa_service import Desglose, PrecioAplicable
 
 
@@ -87,6 +98,27 @@ def armar_bahia(bahia: Bahia) -> BahiaOut:
 
 def armar_dia_no_laborable(dia: DiaNoLaborable) -> DiaNoLaborableOut:
     return DiaNoLaborableOut(id=dia.id, fecha=dia.fecha, motivo=dia.motivo, autor=dia.autor)
+
+
+def armar_notificacion(fila: Notificacion) -> NotificacionOut:
+    """RF-029: the notice AND how its delivery went, cause included."""
+    return NotificacionOut.model_validate(fila)
+
+
+def armar_dispositivo(fila: Dispositivo) -> DispositivoOut:
+    return DispositivoOut.model_validate(fila)
+
+
+def armar_recordatorio(fila: Recordatorio) -> RecordatorioOut:
+    """RF-030: when the reminder went out and what it was answered."""
+    return RecordatorioOut(
+        reserva_id=fila.reserva_id,
+        programado_para=a_lima(desde_bd(fila.programado_para)),
+        enviado_en=a_lima(desde_bd(fila.enviado_en)) if fila.enviado_en else None,
+        respuesta=fila.respuesta,
+        respondido_en=(a_lima(desde_bd(fila.respondido_en)) if fila.respondido_en else None),
+        estado=fila.estado,
+    )
 
 
 def armar_asignacion(asignacion: AsignacionServicio) -> AsignacionOut:
@@ -358,6 +390,10 @@ def armar_reserva(
         )
 
     pago = _pago_visible(reserva)
+    # RF-022: read, never recalculated. The estimate is written where something
+    # changed (``seguimiento_service.actualizar_estimado``), so a GET never
+    # moves it and never notifies anybody.
+    estimada = desde_bd(reserva.hora_estimada_entrega) or desde_bd(reserva.fin)
 
     return ReservaOut(
         id=reserva.id,
@@ -381,6 +417,9 @@ def armar_reserva(
         hora_fin_real=a_lima(desde_bd(reserva.hora_fin_real)) if reserva.hora_fin_real else None,
         hora_entrega=a_lima(desde_bd(reserva.hora_entrega)) if reserva.hora_entrega else None,
         fin_estimado=a_lima(reserva_service.fin_estimado(reserva)),
+        porcentaje_avance=seguimiento_service.porcentaje_avance(db, reserva),
+        hora_estimada_entrega=a_lima(estimada),
+        minutos_retraso=seguimiento_service.minutos_de_retraso(reserva, estimada),
         # Same criterion the horizontal authorization filter uses (RF-017 CA-03).
         observaciones_ingreso=(
             reserva.observaciones_ingreso if reserva_service.puede_ver_todas(permisos) else None

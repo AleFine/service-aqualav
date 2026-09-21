@@ -134,6 +134,17 @@ def _orden_de_presentacion(grafo: _Grafo, principal: list[str]) -> list[str]:
     return [*orden, *restantes]
 
 
+def cadena_principal(db: Session) -> list[str]:
+    """The main flow of the shop, in order, derived from the table.
+
+    Exported because RF-022 needs the POSITION of a state in the cycle to turn
+    it into a percentage. Deriving it here instead of writing the chain down in
+    the tracking service is what keeps ``porcentaje_avance`` honest when a
+    state is inserted as a row (principle P3).
+    """
+    return _cadena_principal(_Grafo(transicion_repo.listar_todas(db)))
+
+
 def listar(db: Session) -> list[EstadoCatalogoOut]:
     """Every state the table declares, ready for the aggregate screens."""
     grafo = _Grafo(transicion_repo.listar_todas(db))

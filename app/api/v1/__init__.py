@@ -15,6 +15,8 @@ from app.api.v1 import (
     disponibilidad,
     estados,
     health,
+    interno,
+    notificaciones,
     operacion,
     pagos,
     perfil,
@@ -39,6 +41,8 @@ api_router.include_router(admin_bahias.router)
 api_router.include_router(agenda.router)
 api_router.include_router(disponibilidad.router)
 api_router.include_router(estados.router)
+api_router.include_router(notificaciones.router)
+api_router.include_router(interno.router)
 # ``operacion`` and ``asignacion`` first: they own the literal
 # ``/reservas/buscar``, ``/reservas/atencion-inmediata`` and ``/reservas/cola``,
 # which would otherwise be swallowed by ``/reservas/{reserva_id}``.

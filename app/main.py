@@ -17,6 +17,7 @@ from app.config import settings
 from app.core.errors import registrar_manejadores
 from app.database import SessionLocal
 from app.seed import ejecutar_seed
+from app.services import planificador
 
 logger = logging.getLogger("aqualav")
 
@@ -47,8 +48,20 @@ def _sembrar() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    """Seed, then run the optional background sweep of RF-030.
+
+    The sweep is a loop around ``planificador.ejecutar_pendientes``, the very
+    same function ``POST /interno/planificador`` and the tests call. Switching
+    it off (``PLANIFICADOR_HABILITADO=false``) removes the loop and nothing
+    else, which is exactly what the suite does so no test ever waits on a
+    clock.
+    """
     _sembrar()
-    yield
+    tarea = planificador.iniciar_bucle()
+    try:
+        yield
+    finally:
+        await planificador.detener_bucle(tarea)
 
 
 app = FastAPI(
