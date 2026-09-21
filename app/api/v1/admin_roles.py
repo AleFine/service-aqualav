@@ -9,7 +9,7 @@ catalogue and assign a role to a user. All three are guarded by the permission
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.deps import get_db, requiere_permiso
+from app.deps import get_db, permisos_actuales, requiere_permiso
 from app.models import Usuario
 from app.schemas import AsignacionRolIn, ErrorBody, Lista, PermisoOut, RolOut, UsuarioOut
 from app.services import rol_service
@@ -63,6 +63,15 @@ def asignar_rol(
     usuario_id: int,
     datos: AsignacionRolIn,
     autor: Usuario = Depends(requiere_permiso(rol_service.PERMISO_ADMINISTRAR_ROLES)),
+    permisos: list[str] = Depends(permisos_actuales),
     db: Session = Depends(get_db),
 ) -> UsuarioOut:
-    return armar_usuario(rol_service.asignar_rol(db, usuario_id, datos.rol_id, autor))
+    """RF-004: mover a un usuario de rol.
+
+    El permiso viaja al servicio aunque esta puerta ya lo exija: es el
+    servicio quien lo valida para todas las puertas (RF-035 llega a la misma
+    escritura desde ``/admin/usuarios``).
+    """
+    return armar_usuario(
+        rol_service.asignar_rol(db, usuario_id, datos.rol_id, autor, permisos=permisos)
+    )

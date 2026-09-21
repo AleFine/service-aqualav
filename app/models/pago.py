@@ -149,8 +149,13 @@ class TransaccionPasarela(Base):
     reserva_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("reserva.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    #: RNF-017 M1: mandatory on the charge AND on the reversal.
-    idempotency_key: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    #: RNF-017 M1: mandatory on the charge AND on the reversal. ``index=True``
+    #: as well because migration ``0008`` created ``ix_transaccion_pasarela_
+    #: idempotency_key``: the lookup by key is the hot path of RF-026 flow 3b
+    #: and both descriptions of the table have to carry it.
+    idempotency_key: Mapped[str] = mapped_column(
+        String(80), unique=True, index=True, nullable=False
+    )
     # cobro | reembolso
     operacion: Mapped[str] = mapped_column(String(20), nullable=False)
     # aprobada | rechazada | pendiente | tiempo_de_espera
@@ -271,7 +276,11 @@ class Reembolso(Base):
     #: finish the reversal by hand reads first.
     detalle: Mapped[str | None] = mapped_column(String(300), nullable=True)
     #: RNF-017 M1: "clave de idempotencia obligatoria también en reembolsos".
-    idempotency_key: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    #: Indexed like the gateway transaction, and for the same reason: that is
+    #: what migration ``0008`` created.
+    idempotency_key: Mapped[str] = mapped_column(
+        String(80), unique=True, index=True, nullable=False
+    )
     autor_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("usuario.id"), nullable=True)
     registrado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

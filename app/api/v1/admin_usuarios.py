@@ -5,7 +5,7 @@ import math
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.deps import get_db, requiere_permiso
+from app.deps import get_db, permisos_actuales, requiere_permiso
 from app.models import Usuario
 from app.schemas import (
     TAMANIO_PAGINA_DEFECTO,
@@ -70,9 +70,15 @@ def listar(
 def crear(
     datos: UsuarioInternoCrear,
     autor: Usuario = Depends(requiere_permiso(usuario_service.PERMISO_ADMINISTRAR)),
+    permisos: list[str] = Depends(permisos_actuales),
     db: Session = Depends(get_db),
 ) -> UsuarioOut:
-    return armar_usuario(usuario_service.crear(db, datos, autor))
+    """RF-035: alta de un trabajador con su rol y su bahía habitual.
+
+    Dar de alta con un rol es asignar un rol, así que el servicio exige
+    además ``rol:administrar`` (RF-004).
+    """
+    return armar_usuario(usuario_service.crear(db, datos, autor, permisos=permisos))
 
 
 @router.patch(
@@ -85,6 +91,16 @@ def actualizar(
     usuario_id: int,
     datos: UsuarioInternoActualizar,
     autor: Usuario = Depends(requiere_permiso(usuario_service.PERMISO_ADMINISTRAR)),
+    permisos: list[str] = Depends(permisos_actuales),
     db: Session = Depends(get_db),
 ) -> UsuarioOut:
-    return armar_usuario(usuario_service.actualizar(db, usuario_id, datos, autor))
+    """RF-035: edición, cambio de rol y activación de una cuenta.
+
+    ``usuario:administrar`` abre la puerta; **cambiar el rol exige además**
+    ``rol:administrar``, y lo comprueba el servicio, no este router: es la
+    misma escritura que hace ``PUT /admin/usuarios/{id}/rol`` y no puede
+    depender de por dónde se entre (RF-004).
+    """
+    return armar_usuario(
+        usuario_service.actualizar(db, usuario_id, datos, autor, permisos=permisos)
+    )

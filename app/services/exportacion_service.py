@@ -244,9 +244,18 @@ def renderizar(
 # --------------------------------------------------------------------------
 # Building a report from a request
 # --------------------------------------------------------------------------
+def permiso_de(tipo: str) -> str:
+    """Which permission code the given report type demands."""
+    return PERMISOS_POR_TIPO.get(tipo, reporte_service.PERMISO_LEER_REPORTES)
+
+
+def _tiene_permiso(tipo: str, permisos: list[str]) -> bool:
+    return permiso_de(tipo) in set(permisos or ())
+
+
 def _validar_permiso(tipo: str, permisos: list[str]) -> None:
-    requerido = PERMISOS_POR_TIPO.get(tipo, reporte_service.PERMISO_LEER_REPORTES)
-    if requerido not in set(permisos or ()):
+    if not _tiene_permiso(tipo, permisos):
+        requerido = permiso_de(tipo)
         raise PermisoDenegado(detalles=[detalle(None, f"Se requiere el permiso {requerido}.")])
 
 
@@ -488,24 +497,70 @@ def procesar_pendientes(
 # --------------------------------------------------------------------------
 # Reading exports back
 # --------------------------------------------------------------------------
-def obtener(db: Session, exportacion_id: int) -> ReporteExportacion:
+# Asking for an export and READING one back are the same operation seen twice,
+# so they answer to the same rule: the permission that guards a type guards
+# every door that type can come out of. ``solicitar`` validated it from the
+# first day and the three readers did not, which made ``reporte:leer`` enough
+# to download an ``auditoria`` file somebody else had produced - the exact
+# opposite of what RF-036 and RNF-014 ask for, and of what this router's
+# docstring promised. The permission travels with every call now.
+def obtener(db: Session, exportacion_id: int, *, permisos: list[str]) -> ReporteExportacion:
+    """One export request, if the caller may read reports OF ITS TYPE.
+
+    The row is resolved first and its own ``tipo`` is what decides: which
+    permission an export demands is a property of what it contains, never of
+    who is asking or of which door they came through.
+    """
     fila = reporte_repo.obtener_exportacion(db, exportacion_id)
     if fila is None:
         raise RecursoNoEncontrado("No encontramos esa exportación.")
+    _validar_permiso(fila.tipo, permisos)
     return fila
 
 
-def listar(db: Session, *, solicitado_por_id: int | None = None) -> list[ReporteExportacion]:
-    return reporte_repo.listar_exportaciones(db, solicitado_por_id=solicitado_por_id)
+def listar(
+    db: Session, *, permisos: list[str], solicitado_por_id: int | None = None
+) -> list[ReporteExportacion]:
+    """The export requests the caller may see.
+
+    TWO filters, because there are two different ways to see too much and
+    each one closes only its own:
+
+    * ``solicitado_por_id`` is the HORIZONTAL filter, the same one
+      ``reserva_service.obtener`` applies to a booking. An export row carries
+      the filters it was asked with - which user, which action, which entity -
+      so the list of somebody else's requests says what they were
+      investigating even before any file is downloaded. Two people holding
+      ``reporte:leer`` are not one person;
+    * the per-row type check is the VERTICAL filter. It is not redundant with
+      the first: it is what keeps an audit export out of a reporting-only
+      listing on the day a role holds ``reporte:leer`` without
+      ``auditoria:leer`` - which no seeded role does today, and which is
+      precisely why the hole stayed invisible.
+
+    A row the caller may not read is dropped, not rejected: a list answers
+    with what there is to see, and the absence of somebody else's audit export
+    is not an error of theirs.
+    """
+    filas = reporte_repo.listar_exportaciones(db, solicitado_por_id=solicitado_por_id)
+    return [fila for fila in filas if _tiene_permiso(fila.tipo, permisos)]
 
 
 def archivo(
     db: Session,
     fila: ReporteExportacion,
     *,
+    permisos: list[str],
     almacenamiento: ProveedorAlmacenamiento | None = None,
 ) -> tuple[bytes, str]:
-    """``(bytes, mime)`` of a finished export."""
+    """``(bytes, mime)`` of a finished export.
+
+    Checked again even though every router reaches this through
+    :func:`obtener`: the bytes are the thing RNF-014 is about, and a guard
+    that only holds while the two calls stay next to each other is a guard
+    that holds until somebody writes a third caller.
+    """
+    _validar_permiso(fila.tipo, permisos)
     if not fila.archivo_key:
         raise ExportacionNoDisponible(
             detalles=[detalle("estado", f"La exportación está «{fila.estado}».")]

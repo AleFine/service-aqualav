@@ -414,3 +414,132 @@ def test_un_bloqueo_al_reves_se_rechaza(api_admin, db):
 
     assert respuesta.status_code == 422
     assert codigo_error(respuesta) == "DATOS_INVALIDOS"
+
+
+# --------------------------------------------------------------------------
+# GET /agenda/bloqueos y GET /agenda/dias-no-laborables
+# --------------------------------------------------------------------------
+def test_el_listado_de_bloqueos_devuelve_los_del_rango_con_su_bahia(api_admin, db):
+    """RF-018: sin este listado, un bloqueo se pone y no se puede levantar.
+
+    ``DELETE /agenda/bloqueos/{id}`` necesita un id, y el id solo sale de
+    aquí. Se comprueban las dos formas de bloqueo que admite el modelo —una
+    bahía concreta y el local entero (``bahia`` nulo)— porque la pantalla las
+    dibuja distinto.
+    """
+    bahias = _bahias(db)
+    fecha = proximo_lunes(dias_minimos=4)
+
+    de_una_bahia = _bloquear(
+        api_admin,
+        inicio=instante(fecha, 9, 0),
+        fin=instante(fecha, 10, 0),
+        bahia_id=bahias[0].id,
+        descripcion="Cambio de filtros",
+    )
+    de_todo_el_local = _bloquear(
+        api_admin, inicio=instante(fecha, 15, 0), fin=instante(fecha, 16, 0), motivo="ausencia"
+    )
+    assert de_una_bahia.status_code == 201, de_una_bahia.text
+    assert de_todo_el_local.status_code == 201, de_todo_el_local.text
+
+    respuesta = api_admin.get(f"{RUTA}/agenda/bloqueos", params={"desde": fecha.isoformat()})
+
+    assert respuesta.status_code == 200, respuesta.text
+    por_id = {fila["id"]: fila for fila in respuesta.json()["items"]}
+    assert de_una_bahia.json()["id"] in por_id
+    assert de_todo_el_local.json()["id"] in por_id
+
+    concreto = por_id[de_una_bahia.json()["id"]]
+    assert concreto["bahia"]["id"] == bahias[0].id
+    assert concreto["motivo"] == "mantenimiento"
+    assert concreto["descripcion"] == "Cambio de filtros"
+    assert concreto["autor"], "quién lo bloqueó es parte del registro (RNF-014)"
+    assert por_id[de_todo_el_local.json()["id"]]["bahia"] is None, "todo el local"
+
+
+def test_el_listado_de_bloqueos_respeta_el_rango_pedido(api_admin, db):
+    """Un rango que no es el del bloqueo no lo trae.
+
+    Si el filtro no se aplicara, la pantalla de una semana mostraría los
+    bloqueos de todas y el test anterior pasaría igual.
+    """
+    fecha = proximo_lunes(dias_minimos=4)
+    lejos = fecha + timedelta(days=21)
+    bloqueo = _bloquear(api_admin, inicio=instante(lejos, 9, 0), fin=instante(lejos, 10, 0))
+    assert bloqueo.status_code == 201, bloqueo.text
+
+    cercano = api_admin.get(
+        f"{RUTA}/agenda/bloqueos",
+        params={"desde": fecha.isoformat(), "hasta": (fecha + timedelta(days=1)).isoformat()},
+    )
+    propio = api_admin.get(f"{RUTA}/agenda/bloqueos", params={"desde": lejos.isoformat()})
+
+    assert bloqueo.json()["id"] not in {f["id"] for f in cercano.json()["items"]}
+    assert bloqueo.json()["id"] in {f["id"] for f in propio.json()["items"]}
+
+
+def test_el_listado_de_dias_no_laborables_devuelve_los_feriados_declarados(api_admin):
+    """RF-018 / RN-07: el calendario de cierres, legible antes de poder editarlo."""
+    fecha = proximo_lunes(dias_minimos=10)
+
+    creado = api_admin.post(
+        f"{RUTA}/agenda/dias-no-laborables",
+        json={"fecha": fecha.isoformat(), "motivo": "Feriado de prueba"},
+    )
+    assert creado.status_code == 201, creado.text
+
+    respuesta = api_admin.get(f"{RUTA}/agenda/dias-no-laborables")
+
+    assert respuesta.status_code == 200, respuesta.text
+    filas = {fila["fecha"]: fila for fila in respuesta.json()["items"]}
+    assert filas[fecha.isoformat()]["motivo"] == "Feriado de prueba"
+    assert filas[fecha.isoformat()]["autor"], "quién lo declaró (RNF-014)"
+
+
+def test_el_listado_de_dias_no_laborables_filtra_por_rango(api_admin):
+    """El mismo filtro que los bloqueos, y por la misma razón."""
+    cerca = proximo_lunes(dias_minimos=10)
+    lejos = cerca + timedelta(days=30)
+    for fecha, motivo in ((cerca, "Cercano"), (lejos, "Lejano")):
+        creado = api_admin.post(
+            f"{RUTA}/agenda/dias-no-laborables",
+            json={"fecha": fecha.isoformat(), "motivo": motivo},
+        )
+        assert creado.status_code == 201, creado.text
+
+    acotado = api_admin.get(
+        f"{RUTA}/agenda/dias-no-laborables",
+        params={"desde": cerca.isoformat(), "hasta": (cerca + timedelta(days=1)).isoformat()},
+    )
+
+    fechas = {fila["fecha"] for fila in acotado.json()["items"]}
+    assert cerca.isoformat() in fechas
+    assert lejos.isoformat() not in fechas
+
+
+def test_leer_la_agenda_exige_agenda_leer(api_cliente, api_operario, cliente_http):
+    """RF-018: sus actores son el administrador y el mostrador, nadie más.
+
+    El cliente ve la DISPONIBILIDAD (lo libre); la agenda —lo ocupado, con
+    nombre de cliente y de bahía— es información de taller.
+    """
+    hoy = proximo_lunes().isoformat()
+
+    assert api_cliente.get(f"{RUTA}/agenda/bloqueos", params={"desde": hoy}).status_code == 403
+    assert api_cliente.get(f"{RUTA}/agenda/dias-no-laborables").status_code == 403
+    assert api_operario.get(f"{RUTA}/agenda/dias-no-laborables").status_code == 403
+    assert cliente_http.get(f"{RUTA}/agenda/dias-no-laborables").status_code == 401
+
+
+def test_el_mostrador_lee_la_agenda_porque_RF_018_lo_nombra(api_recepcion, db):
+    """RF-018 nombra al recepcionista junto al administrador."""
+    fecha = proximo_lunes(dias_minimos=4)
+
+    assert (
+        api_recepcion.get(
+            f"{RUTA}/agenda/bloqueos", params={"desde": fecha.isoformat()}
+        ).status_code
+        == 200
+    )
+    assert api_recepcion.get(f"{RUTA}/agenda/dias-no-laborables").status_code == 200

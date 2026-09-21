@@ -39,7 +39,26 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations against a live connection."""
+    """Run migrations against a live connection.
+
+    A caller may hand one over in ``config.attributes["connection"]`` - the
+    pattern Alembic documents for running the chain from inside a program.
+    ``tests/test_migraciones.py`` uses it to walk ``upgrade head`` and
+    ``downgrade base`` over a throwaway SQLite file, so the chain is exercised
+    by the suite instead of by hand. Without it nothing changes: the engine is
+    built from ``settings.database_url`` exactly as before.
+    """
+    compartida = config.attributes.get("connection")
+    if compartida is not None:
+        context.configure(
+            connection=compartida,
+            target_metadata=target_metadata,
+            compare_type=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
     connectable = create_engine(settings.database_url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(

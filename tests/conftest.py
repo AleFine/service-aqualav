@@ -9,6 +9,7 @@ locking mechanism.
 
 import os
 import tempfile
+from collections.abc import Iterable
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -156,6 +157,73 @@ def api_operario(cliente_http):
 def api_admin(cliente_http):
     """Authenticated as the demo administrator."""
     return _autenticar(cliente_http, settings.seed_admin_correo, settings.seed_admin_password)
+
+
+# --------------------------------------------------------------------------
+# Roles cut to measure
+# --------------------------------------------------------------------------
+#: Password every bespoke account gets. It never leaves the suite.
+PASSWORD_DE_PRUEBA = "Prueba-2030!"
+
+
+def rol_a_medida(db, nombre: str, codigos: Iterable[str]):
+    """A role holding EXACTLY ``codigos`` and nothing else.
+
+    The four seeded roles are deliberately coherent: nobody holds
+    ``usuario:administrar`` without ``rol:administrar``, nor ``reporte:leer``
+    without ``auditoria:leer``. That coherence is what kept two real
+    authorization holes invisible - the code was never asked the awkward
+    question. This builds the role that asks it.
+
+    A test role is data, like every other role: the rule that role names live
+    only in ``app/seed.py`` is about the APPLICATION deciding by name, and
+    nothing here decides anything - it hands a permission list to the same
+    ``rol_permiso`` table the seed writes.
+    """
+    from app.models import Permiso, Rol
+
+    rol = Rol(nombre=nombre, descripcion="Rol de prueba con permisos a medida.")
+    faltantes = []
+    for codigo in codigos:
+        permiso = db.scalars(select(Permiso).where(Permiso.codigo == codigo)).first()
+        if permiso is None:
+            faltantes.append(codigo)
+        else:
+            rol.permisos.append(permiso)
+    assert not faltantes, f"El seed debería conocer estos permisos: {faltantes}"
+    db.add(rol)
+    db.commit()
+    return rol
+
+
+def usuario_a_medida(db, correo: str, codigos: Iterable[str]):
+    """An ACTIVE account whose role holds exactly ``codigos``."""
+    from app.models import EstadoCuenta, Usuario
+
+    rol = rol_a_medida(db, f"prueba-{correo.split('@')[0]}", codigos)
+    usuario = Usuario(
+        nombres="Prueba",
+        apellidos="A Medida",
+        correo=correo,
+        telefono="987000999",
+        hash_password=security.hash_password(PASSWORD_DE_PRUEBA),
+        rol_id=rol.id,
+        estado_cuenta=EstadoCuenta.ACTIVA.value,
+    )
+    db.add(usuario)
+    db.commit()
+    db.refresh(usuario)
+    return usuario
+
+
+def api_a_medida(cliente_http, db, correo: str, codigos: Iterable[str]) -> TestClient:
+    """An authenticated client whose role holds exactly ``codigos``.
+
+    The instrument every authorization test in this suite uses to reproduce an
+    attack: it is the attacker's session, not a mocked permission list.
+    """
+    usuario_a_medida(db, correo, codigos)
+    return _autenticar(cliente_http, correo, PASSWORD_DE_PRUEBA)
 
 
 # --------------------------------------------------------------------------

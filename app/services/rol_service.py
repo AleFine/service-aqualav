@@ -12,7 +12,12 @@ token revocation hook of flow 4a.
 
 from sqlalchemy.orm import Session
 
-from app.core.errors import CambioDeRolPropioDenegado, RecursoNoEncontrado, detalle
+from app.core.errors import (
+    CambioDeRolPropioDenegado,
+    PermisoDenegado,
+    RecursoNoEncontrado,
+    detalle,
+)
 from app.models import Permiso, Rol, Usuario
 from app.repositories import usuario as usuario_repo
 from app.services import auth_service, eventos
@@ -21,6 +26,34 @@ from app.services import auth_service, eventos
 #: may not take away from themselves (flow 3a): losing it means losing the
 #: ability to undo the change.
 PERMISO_ADMINISTRAR_ROLES = "rol:administrar"
+
+
+def exigir_permiso_de_rol(permisos: list[str]) -> None:
+    """Demand ``rol:administrar`` from whoever is about to hand out a role.
+
+    Giving somebody a role IS the privilege change, whichever screen it is
+    typed on. ``PUT /admin/usuarios/{id}/rol`` asks for this permission at its
+    door, but RF-035 reaches the same write through ``POST /admin/usuarios``
+    and ``PATCH /admin/usuarios/{id}``, which are guarded by
+    ``usuario:administrar`` - a permission about editing people, not about
+    granting power. So the check lives HERE, next to the write, which is the
+    pattern INC-7 established for ``reserva_service.reprogramar`` and that
+    ``operacion_service.validar_transicion`` follows: an operation reachable
+    through more than one door validates its own permission.
+
+    No seeded role holds one of the two without the other, so nothing is
+    exploitable today. That is a property of the current seed, not of the
+    code, and RF-004 does not say "unless the seed happens to be safe".
+    """
+    if PERMISO_ADMINISTRAR_ROLES not in set(permisos or ()):
+        raise PermisoDenegado(
+            detalles=[
+                detalle(
+                    "rol_id",
+                    f"Asignar un rol requiere el permiso {PERMISO_ADMINISTRAR_ROLES}.",
+                )
+            ]
+        )
 
 
 def listar_roles(db: Session) -> list[Rol]:
@@ -33,14 +66,23 @@ def listar_permisos(db: Session) -> list[Permiso]:
     return usuario_repo.listar_permisos(db)
 
 
-def aplicar_rol(db: Session, usuario: Usuario, rol: Rol, autor: Usuario) -> bool:
+def aplicar_rol(
+    db: Session, usuario: Usuario, rol: Rol, autor: Usuario, *, permisos: list[str]
+) -> bool:
     """Move ``usuario`` to ``rol`` inside the CALLER's transaction.
 
     Split out of :func:`asignar_rol` so RF-035 can change a worker's role in the
     same write as the rest of their profile without committing twice. Returns
     whether anything changed; assigning the role the user already holds is a
     no-op that writes nothing to the audit trail and drops no session.
+
+    ``permisos`` is required rather than optional on purpose: a caller that
+    forgets it gets a ``TypeError`` at import-test time, not a silent bypass.
+    The check runs BEFORE the no-op shortcut, so "assign the role they already
+    have" cannot be used to find out anything either.
     """
+    exigir_permiso_de_rol(permisos)
+
     anterior = usuario.rol
     if anterior.id == rol.id:
         return False
@@ -90,10 +132,12 @@ def obtener_rol(db: Session, rol_id: int) -> Rol:
     return rol
 
 
-def asignar_rol(db: Session, usuario_id: int, rol_id: int, autor: Usuario) -> Usuario:
+def asignar_rol(
+    db: Session, usuario_id: int, rol_id: int, autor: Usuario, *, permisos: list[str]
+) -> Usuario:
     """Give ``usuario_id`` the role ``rol_id`` (RF-004 steps 3 and 4).
 
-    Two rules guard the change:
+    Three rules guard the change:
 
     * flow 3a - the caller may not leave themselves without
       ``rol:administrar``. The check is on the PERMISSION the destination role
@@ -101,7 +145,10 @@ def asignar_rol(db: Session, usuario_id: int, rol_id: int, autor: Usuario) -> Us
       invents later;
     * flow 4a - a role change invalidates the refresh tokens of the affected
       user, so the new permissions apply on the next token instead of on the
-      next login (:func:`app.services.auth_service.revocar_tokens_de_refresco`).
+      next login (:func:`app.services.auth_service.revocar_tokens_de_refresco`);
+    * ``rol:administrar`` itself, checked by :func:`aplicar_rol` rather than
+      only by this router, because RF-035 reaches the same write through a
+      door guarded by a different permission.
 
     Assigning the role the user already holds is a no-op: nothing is written to
     the audit trail and no session is dropped.
@@ -111,7 +158,7 @@ def asignar_rol(db: Session, usuario_id: int, rol_id: int, autor: Usuario) -> Us
         raise RecursoNoEncontrado("No encontramos ese usuario.")
 
     rol = obtener_rol(db, rol_id)
-    if not aplicar_rol(db, usuario, rol, autor):
+    if not aplicar_rol(db, usuario, rol, autor, permisos=permisos):
         return usuario
 
     db.commit()

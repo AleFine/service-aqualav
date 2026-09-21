@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -50,10 +50,10 @@ class Usuario(Calificable, Base):
         String(5), nullable=False, default=Idioma.ES.value, server_default=Idioma.ES.value
     )
     notificar_push: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=True, server_default=true()
     )
     notificar_correo: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=True, server_default=true()
     )
     #: RNF-018: when the person accepted the privacy policy. ``RegistroIn``
     #: already refuses a registration without the tick; this is the receipt.

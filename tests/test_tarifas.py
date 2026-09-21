@@ -826,3 +826,146 @@ def test_el_catalogo_de_tarifas_exige_token(cliente_http):
     assert cliente_http.post(f"{RUTA}/tarifas/calculo", json={"servicio_id": 1}).status_code == 401
     assert cliente_http.get(f"{RUTA}/paquetes").status_code == 401
     assert cliente_http.get(f"{RUTA}/promociones").status_code == 401
+
+
+# --------------------------------------------------------------------------
+# GET /admin/factores - el catálogo de factores, sin pruebas hasta ahora
+# --------------------------------------------------------------------------
+def test_el_listado_de_factores_muestra_los_vigentes_con_su_alcance(api_admin):
+    """RF-010 delta: la pantalla desde la que se administra RN-04.
+
+    Se comprueba lo que la pantalla necesita para poder editar sin equivocarse:
+    que el factor global (``servicio_id`` nulo) y el factor de un servicio
+    concreto se distinguen, y que el SUV trae las **milésimas** de RF-012
+    CA-01 (1300 = 1,3), no un float.
+    """
+    respuesta = api_admin.get(f"{RUTA}/admin/factores")
+
+    assert respuesta.status_code == 200, respuesta.text
+    items = respuesta.json()["items"]
+    globales = {fila["tipo_vehiculo"]: fila for fila in items if fila["servicio_id"] is None}
+
+    assert globales["suv"]["factor_milesimas"] == 1300
+    assert globales["sedan"]["factor_milesimas"] == 1000
+    por_servicio = [fila for fila in items if fila["servicio_id"] is not None]
+    assert por_servicio, "el seed deja un factor propio de «Lavado Express»"
+    assert all(fila["servicio"] for fila in por_servicio), "la pantalla necesita el nombre"
+
+
+def test_el_listado_de_factores_solo_devuelve_el_vigente_de_cada_pareja(api_admin):
+    """Los factores se versionan como ``servicio_precio``: el listado no acumula.
+
+    Se redefine el factor del SUV y el listado tiene que seguir teniendo UNA
+    fila para ``(global, suv)`` — la nueva. Si devolviera el histórico, la
+    pantalla de administración mostraría dos factores contradictorios.
+    """
+    antes = api_admin.get(f"{RUTA}/admin/factores").json()["items"]
+    cuantos = len([f for f in antes if f["servicio_id"] is None and f["tipo_vehiculo"] == "suv"])
+    assert cuantos == 1
+
+    cambio = api_admin.put(
+        f"{RUTA}/admin/factores", json={"tipo_vehiculo": "suv", "factor_milesimas": 1500}
+    )
+    assert cambio.status_code == 200, cambio.text
+
+    despues = api_admin.get(f"{RUTA}/admin/factores").json()["items"]
+    vigentes = [f for f in despues if f["servicio_id"] is None and f["tipo_vehiculo"] == "suv"]
+
+    assert len(vigentes) == 1
+    assert vigentes[0]["factor_milesimas"] == 1500
+
+
+def test_el_listado_de_factores_exige_administrar_servicios(api_recepcion, cliente_http):
+    """RF-010: los factores son catálogo, y el catálogo lo administra quien puede."""
+    assert api_recepcion.get(f"{RUTA}/admin/factores").status_code == 403
+    assert cliente_http.get(f"{RUTA}/admin/factores").status_code == 401
+
+
+# --------------------------------------------------------------------------
+# GET /admin/paquetes y PATCH /admin/paquetes/{id}
+# --------------------------------------------------------------------------
+def _paquete_sembrado(api_admin) -> dict:
+    respuesta = api_admin.get(f"{RUTA}/admin/paquetes")
+    assert respuesta.status_code == 200, respuesta.text
+    items = respuesta.json()["items"]
+    assert items, "el seed deja «Pack Brillo Total»"
+    return items[0]
+
+
+def test_el_listado_de_paquetes_trae_sus_servicios_y_el_ahorro(api_admin):
+    """RF-011: un paquete se administra sabiendo qué incluye y cuánto ahorra.
+
+    ``precio_regular`` es la suma de los precios sueltos de sus líneas; sin él
+    la pantalla no puede decir «ahorras S/ X», que es la razón de ser de un
+    paquete.
+    """
+    paquete = _paquete_sembrado(api_admin)
+
+    assert paquete["nombre"] == "Pack Brillo Total"
+    assert paquete["activo"] is True
+    assert len(paquete["servicios"]) == 2
+    assert paquete["precio"]["moneda"] == "PEN"
+    assert (
+        paquete["precio_regular"]["monto_centimos"] > paquete["precio"]["monto_centimos"]
+    ), "un paquete que no ahorra nada no es un paquete"
+
+
+def test_desactivar_un_paquete_lo_saca_del_catalogo_publico_pero_no_del_de_administracion(
+    api_admin, api_cliente
+):
+    """RF-011: ``GET /admin/paquetes`` lista activos e inactivos, el público no.
+
+    Es la diferencia entre retirar un paquete y borrarlo: el administrador
+    tiene que poder volver a encenderlo, y el cliente no tiene que verlo
+    mientras esté apagado.
+    """
+    paquete = _paquete_sembrado(api_admin)
+
+    apagado = api_admin.patch(f"{RUTA}/admin/paquetes/{paquete['id']}", json={"activo": False})
+
+    assert apagado.status_code == 200, apagado.text
+    assert apagado.json()["activo"] is False
+    assert [p["id"] for p in api_admin.get(f"{RUTA}/admin/paquetes").json()["items"]] == [
+        paquete["id"]
+    ], "el administrador lo sigue viendo"
+    publicos = api_cliente.get(f"{RUTA}/paquetes").json()["items"]
+    assert paquete["id"] not in [p["id"] for p in publicos]
+
+    encendido = api_admin.patch(f"{RUTA}/admin/paquetes/{paquete['id']}", json={"activo": True})
+    assert encendido.json()["activo"] is True
+
+
+def test_editar_el_precio_de_un_paquete_lo_deja_auditado(api_admin, db):
+    """RNF-014: cambiar un precio es una operación sensible (RF-036 `CA-01`)."""
+    paquete = _paquete_sembrado(api_admin)
+    anterior = paquete["precio"]["monto_centimos"]
+
+    respuesta = api_admin.patch(
+        f"{RUTA}/admin/paquetes/{paquete['id']}",
+        json={"precio_centimos": anterior + 500, "nombre": "Pack Brillo Total Plus"},
+    )
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["precio"]["monto_centimos"] == anterior + 500
+    assert respuesta.json()["nombre"] == "Pack Brillo Total Plus"
+
+    eventos_paquete = db.scalars(
+        select(EventoDominio).where(EventoDominio.entidad == "paquete")
+    ).all()
+    assert eventos_paquete, "el cambio dejó rastro en la bitácora"
+
+
+def test_editar_un_paquete_inexistente_responde_404(api_admin):
+    respuesta = api_admin.patch(f"{RUTA}/admin/paquetes/999999", json={"activo": False})
+
+    assert respuesta.status_code == 404
+    assert codigo_error(respuesta) == "RECURSO_NO_ENCONTRADO"
+
+
+def test_los_paquetes_de_administracion_exigen_su_permiso(api_recepcion, cliente_http):
+    """RF-011: ``promocion:administrar``, nunca un nombre de rol."""
+    assert api_recepcion.get(f"{RUTA}/admin/paquetes").status_code == 403
+    assert (
+        api_recepcion.patch(f"{RUTA}/admin/paquetes/1", json={"activo": False}).status_code == 403
+    )
+    assert cliente_http.get(f"{RUTA}/admin/paquetes").status_code == 401

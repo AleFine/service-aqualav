@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -29,8 +29,14 @@ class Servicio(Calificable, Base):
     #: RF-009 v1.0: the reference picture the catalogue shows. A KEY or URL of
     #: the simulated object storage, never the bytes themselves.
     imagen_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    #: ``text("true")`` y no ``true()``: es literalmente lo que escribió la
+    #: migración 0001 (``sa.text("true")``), y la migración no se puede
+    #: reescribir. Las columnas booleanas que llegaron en la ``0006`` usan
+    #: ``true()``/``false()`` porque ESA migración las escribió así. La
+    #: incoherencia es del esquema, no del ORM, y copiarla exactamente es lo
+    #: que permite que ``tests/test_migraciones.py`` no necesite excepciones.
     activo: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
     #: RF-031: "promedio del servicio actualizado". Sum and count, recomputed
     #: from ``calificacion`` on every rating, so the average is exact and

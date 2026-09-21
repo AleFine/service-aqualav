@@ -14,6 +14,30 @@ Three answers the MVP could not give, all of them DERIVED:
 
 Nothing here runs inside a GET. The estimate is written where something
 actually changed, so reading a reservation never notifies anybody.
+
+HOW CA-01 IS MET, AND BY WHOM
+-----------------------------
+RF-022 ``CA-01`` reads: "dado un servicio en curso, cuando el estado cambia,
+entonces el cliente ve el nuevo estado **en menos de 30 segundos**". That is a
+latency budget, and this module spends none of it: the moment a state changes,
+the new state, ``porcentaje_avance`` and ``hora_estimada_entrega`` are already
+written and every read of the reservation returns them. The server's
+contribution to the budget is one request.
+
+**The remaining budget belongs to the mobile client, and the way it is spent
+is POLLING at an interval of 30 seconds or less.** There is deliberately no
+WebSocket and no SSE here: this is a student project with a simulated
+infrastructure, a push channel would be a second delivery path to keep in sync
+with ``notificacion_service``, and RF-022 asks for a latency, not for a
+transport. ``GET /notificaciones`` (INC-5) and ``GET /reservas/{id}`` are the
+two doors a client polls.
+
+So CA-01 is verified **by Demonstration**, not by an automated test: no test in
+this suite can observe the mobile client's timer, and one that faked it would
+be measuring itself. It is the only acceptance criterion of the thirty-six
+requirements verified this way, and saying so is the point - an unwritten
+assumption is how a latency requirement quietly becomes nobody's. The
+README repeats it under "RF-022".
 """
 
 from datetime import datetime, timedelta

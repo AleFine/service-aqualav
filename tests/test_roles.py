@@ -211,3 +211,132 @@ def test_el_registro_publico_sigue_creando_clientes(cliente_http, db):
     assert respuesta.json()["rol"] == "cliente"
     creado = db.scalars(select(Usuario).where(Usuario.correo == "nuevo.cliente@aqualav.pe")).first()
     assert creado is not None
+
+
+# --------------------------------------------------------------------------
+# RF-004 / RF-035 - la segunda puerta a los privilegios
+# --------------------------------------------------------------------------
+#: Lo que tiene el administrador de usuarios de RF-035 y nada más. En el seed
+#: nadie lleva este permiso sin ``rol:administrar``, que es exactamente por
+#: qué el agujero era invisible: los cuatro roles sembrados son coherentes y
+#: el código nunca tuvo que responder a la pregunta incómoda.
+SOLO_USUARIOS = ("usuario:administrar",)
+
+
+def test_editar_un_usuario_no_es_una_puerta_para_ascenderlo(
+    cliente_http, db, usuario_operario, api_admin
+):
+    """RF-004: el ataque que reprodujo la auditoría, ahora rechazado.
+
+    ``PUT /admin/usuarios/{id}/rol`` exige ``rol:administrar``, pero
+    ``PATCH /admin/usuarios/{id}`` exigía solo ``usuario:administrar`` y
+    llamaba igualmente a ``rol_service.aplicar_rol``. Con eso, un rol de
+    administración de personal ascendía a un operario a administrador.
+
+    No se comprueba solo el 403: se vuelve a leer el usuario y se comprueba
+    que **sigue siendo operario**. Un 403 con la escritura hecha sería peor
+    que un 200.
+    """
+    from tests.conftest import api_a_medida
+
+    administrador = _rol(db, "administrador")
+    rol_previo = usuario_operario.rol_id
+    api = api_a_medida(cliente_http, db, "solo.usuarios@aqualav.pe", SOLO_USUARIOS)
+
+    respuesta = api.patch(
+        f"{RUTA}/admin/usuarios/{usuario_operario.id}",
+        json={"rol_id": administrador.id},
+    )
+
+    assert respuesta.status_code == 403
+    assert codigo_error(respuesta) == "PERMISO_DENEGADO"
+
+    db.expire_all()
+    assert db.get(Usuario, usuario_operario.id).rol_id == rol_previo, "el ascenso NO ocurrió"
+    # Y el administrador de verdad sigue pudiendo hacerlo por la misma puerta.
+    del_admin = api_admin.patch(
+        f"{RUTA}/admin/usuarios/{usuario_operario.id}",
+        json={"rol_id": administrador.id},
+    )
+    assert del_admin.status_code == 200, del_admin.text
+    assert del_admin.json()["rol_id"] == administrador.id
+
+
+def test_dar_de_alta_un_usuario_tampoco_es_una_puerta_para_crear_un_administrador(cliente_http, db):
+    """La misma escritura, un verbo distinto.
+
+    ``POST /admin/usuarios`` pide ``rol_id`` obligatorio: dar de alta es
+    asignar un rol. Sin este cierre, cerrar el `PATCH` solo habría movido la
+    puerta un endpoint más allá —y esta es peor, porque acuña un
+    administrador nuevo en vez de ascender a uno conocido.
+    """
+    from tests.conftest import api_a_medida
+
+    administrador = _rol(db, "administrador")
+    api = api_a_medida(cliente_http, db, "solo.altas@aqualav.pe", SOLO_USUARIOS)
+
+    respuesta = api.post(
+        f"{RUTA}/admin/usuarios",
+        json={
+            "nombres": "Intruso",
+            "apellidos": "Ascendido",
+            "correo": "intruso@aqualav.pe",
+            "telefono": "987000123",
+            "rol_id": administrador.id,
+        },
+    )
+
+    assert respuesta.status_code == 403
+    assert codigo_error(respuesta) == "PERMISO_DENEGADO"
+
+    db.expire_all()
+    creado = db.scalars(select(Usuario).where(Usuario.correo == "intruso@aqualav.pe")).first()
+    assert creado is None, "la cuenta no llegó a existir"
+
+
+def test_editar_lo_que_no_es_el_rol_sigue_bastando_con_usuario_administrar(
+    cliente_http, db, usuario_operario
+):
+    """El cierre no se lleva por delante RF-035.
+
+    Cambiar el teléfono de un trabajador es administrar personal y sigue
+    pidiendo solo ``usuario:administrar``. Lo que exige el permiso de roles es
+    **mover a alguien de rol**, no editar su ficha.
+    """
+    from tests.conftest import api_a_medida
+
+    api = api_a_medida(cliente_http, db, "solo.ficha@aqualav.pe", SOLO_USUARIOS)
+
+    respuesta = api.patch(
+        f"{RUTA}/admin/usuarios/{usuario_operario.id}",
+        json={"telefono": "987123456"},
+    )
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["telefono"] == "987123456"
+
+
+def test_el_permiso_de_rol_se_valida_en_el_servicio_y_no_solo_en_el_router(db, usuario_admin):
+    """El patrón de INC-7, comprobado donde vive.
+
+    Si una operación se alcanza por más de una puerta, el permiso se valida en
+    el servicio. Aquí se llama a ``aplicar_rol`` directamente —sin router, sin
+    HTTP— con una lista de permisos que no lleva ``rol:administrar``, y tiene
+    que negarse igual. Es la diferencia entre cerrar el agujero y tapar sus
+    dos salidas conocidas.
+    """
+    import pytest
+
+    from app.core.errors import PermisoDenegado
+    from app.services import rol_service
+
+    operario = db.scalars(select(Usuario).where(Usuario.correo != usuario_admin.correo)).first()
+    administrador = _rol(db, "administrador")
+    rol_previo = operario.rol_id
+
+    with pytest.raises(PermisoDenegado):
+        rol_service.aplicar_rol(
+            db, operario, administrador, usuario_admin, permisos=["usuario:administrar"]
+        )
+
+    assert operario.rol_id == rol_previo

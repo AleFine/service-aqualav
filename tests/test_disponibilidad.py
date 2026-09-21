@@ -272,3 +272,43 @@ def test_una_franja_bloqueada_recorta_solo_sus_horas(api_cliente, api_admin, db,
     assert (10, 30) not in horas
     assert (9, 0) in horas, "antes de la franja el local sigue abierto"
     assert (11, 0) in horas, "y después también"
+
+
+# --------------------------------------------------------------------------
+# RF-015 - el recepcionista es actor de la disponibilidad, no solo el cliente
+# --------------------------------------------------------------------------
+def test_el_recepcionista_puede_consultar_los_bloques_disponibles(api_recepcion, servicio_corto):
+    """RF-015: el SRS nombra a **Cliente y Recepcionista** como sus actores.
+
+    El paso 3 del flujo es «el sistema muestra los bloques disponibles
+    alternativos», así que el mostrador tiene que poder verlos. Tenía
+    ``reserva:reprogramar`` y ``agenda:leer`` —que enseña lo OCUPADO— pero no
+    ``disponibilidad:leer``, y este endpoint le respondía 403: podía mover una
+    reserva, pero a ciegas.
+    """
+    fecha = proximo_lunes(dias_minimos=3)
+
+    respuesta = api_recepcion.get(
+        f"{RUTA}/disponibilidad",
+        params={"fecha": fecha.isoformat(), "servicio_id": servicio_corto.id},
+    )
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["bloques"], "un lunes cualquiera tiene bloques libres"
+
+
+def test_el_operario_sigue_sin_ver_la_disponibilidad(api_operario, servicio_corto):
+    """La concesión es del mostrador, no de «todo el personal».
+
+    RF-015 no nombra al operario y RF-013 tampoco: la bahía ejecuta el
+    servicio, no negocia la hora. Si el permiso se hubiera repartido por
+    «personal» en vez de por actor, esto respondería 200.
+    """
+    fecha = proximo_lunes(dias_minimos=3)
+
+    respuesta = api_operario.get(
+        f"{RUTA}/disponibilidad",
+        params={"fecha": fecha.isoformat(), "servicio_id": servicio_corto.id},
+    )
+
+    assert respuesta.status_code == 403

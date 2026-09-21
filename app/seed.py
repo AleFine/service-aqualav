@@ -146,6 +146,13 @@ ROL_PERMISOS: dict[str, tuple[str, ...]] = {
         "servicio:leer",
         # RN-01 v1.0: verifying a vehicle is the counter looking at the plate.
         "vehiculo:verificar",
+        # RF-015 names the Customer AND THE RECEPTIONIST as its actors, and
+        # step 3 of its flow is "el sistema muestra los bloques disponibles
+        # alternativos". Rescheduling without being able to see a free block
+        # is not an operation, it is a guess: ``agenda:leer`` shows what is
+        # TAKEN, and this shows what is FREE. Granted in migration ``0012``
+        # too, so an installation that already exists gets it as well.
+        "disponibilidad:leer",
         "agenda:leer",
         # RF-018 names BOTH the administrator and the receptionist as the
         # actors of the agenda: the counter is who reschedules a slot when a

@@ -107,12 +107,21 @@ def crear(
     datos: UsuarioInternoCrear,
     autor: Usuario,
     *,
+    permisos: list[str],
     correo: ProveedorCorreo = PROVEEDOR_CORREO_PREDETERMINADO,
 ) -> Usuario:
     """Register an internal account and mail its temporary password (RF-035).
 
     Flow 2a: an e-mail that already has an account is rejected with 409.
+
+    Creating an account is ALSO handing out a role - ``rol_id`` is mandatory
+    here - so ``rol:administrar`` is demanded exactly as it is on
+    :func:`actualizar`. Minting a brand new administrator and promoting an
+    existing operator are the same privilege change wearing two verbs, and a
+    guard that only covered the second one would just move the door.
     """
+    rol_service.exigir_permiso_de_rol(permisos)
+
     destino = str(datos.correo).strip().lower()
     if usuario_repo.existe_correo(db, destino):
         raise CorreoYaRegistrado(detalles=[detalle("correo", "Ese correo ya tiene una cuenta.")])
@@ -176,9 +185,23 @@ def crear(
 
 
 def actualizar(
-    db: Session, usuario_id: int, datos: UsuarioInternoActualizar, autor: Usuario
+    db: Session,
+    usuario_id: int,
+    datos: UsuarioInternoActualizar,
+    autor: Usuario,
+    *,
+    permisos: list[str],
 ) -> Usuario:
-    """Edit an internal account, including its role and its activation (RF-035)."""
+    """Edit an internal account, including its role and its activation (RF-035).
+
+    ``usuario:administrar`` opens this door; it does NOT grant the power to
+    move somebody between roles. When ``rol_id`` arrives,
+    :func:`app.services.rol_service.aplicar_rol` demands ``rol:administrar``
+    as well, inside this same transaction, so the editing screen cannot be
+    used as a second way into ``PUT /admin/usuarios/{id}/rol`` (RF-004,
+    RF-035). The permissions come from the router because authorization is
+    decided on what the CALLER holds, never on the row being edited.
+    """
     usuario = obtener(db, usuario_id)
     cambios: dict[str, object] = {}
 
@@ -196,9 +219,16 @@ def actualizar(
         usuario.bahia_habitual_id = datos.bahia_habitual_id
 
     if datos.rol_id is not None:
-        # Reuses RF-004: the self-demotion guard and the refresh token
-        # revocation hook apply here too, inside this same transaction.
-        rol_service.aplicar_rol(db, usuario, rol_service.obtener_rol(db, datos.rol_id), autor)
+        # Reuses RF-004 whole: the ``rol:administrar`` check, the self-demotion
+        # guard and the refresh token revocation hook all apply here too,
+        # inside this same transaction.
+        rol_service.aplicar_rol(
+            db,
+            usuario,
+            rol_service.obtener_rol(db, datos.rol_id),
+            autor,
+            permisos=permisos,
+        )
 
     if datos.activa is not None:
         activa_ahora = usuario.estado_cuenta == EstadoCuenta.ACTIVA.value

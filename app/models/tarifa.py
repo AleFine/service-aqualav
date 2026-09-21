@@ -66,8 +66,15 @@ class FactorTipoVehiculo(Base):
     #: One of ``TipoVehiculo``; a plain string so a new type is a data change.
     tipo_vehiculo: Mapped[str] = mapped_column(String(20), nullable=False)
     #: Thousandths: 1000 = 1.0, 1300 = 1.3. Never a float (P6).
+    #: ``server_default`` as well as ``default`` because migration ``0005``
+    #: created the column with one: the ORM and the migration have to describe
+    #: the same table, or a row inserted by hand outside the ORM gets a
+    #: different factor than a row inserted through it.
     factor_milesimas: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=FACTOR_BASE_MILESIMAS
+        Integer,
+        nullable=False,
+        default=FACTOR_BASE_MILESIMAS,
+        server_default=str(FACTOR_BASE_MILESIMAS),
     )
     vigente_desde: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -273,8 +280,12 @@ class ReservaTarifaDesglose(Base):
     )
     precio_base_centimos: Mapped[int] = mapped_column(Integer, nullable=False)
     tipo_vehiculo: Mapped[str] = mapped_column(String(20), nullable=False)
+    #: Same alignment with migration ``0005`` as ``FactorTipoVehiculo``.
     factor_milesimas: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=FACTOR_BASE_MILESIMAS
+        Integer,
+        nullable=False,
+        default=FACTOR_BASE_MILESIMAS,
+        server_default=str(FACTOR_BASE_MILESIMAS),
     )
     base_ajustada_centimos: Mapped[int] = mapped_column(Integer, nullable=False)
     adicionales_centimos: Mapped[int] = mapped_column(

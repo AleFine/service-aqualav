@@ -24,6 +24,7 @@ alguien tenga que acordarse de programar.
 
 import ast
 import pathlib
+import re
 from datetime import date, timedelta
 
 import pytest
@@ -43,8 +44,28 @@ from tests.conftest import (
     pagar_en_linea,
     proximo_lunes,
 )
+from tests.guardas_ast import modulos
 
-RAIZ_APP = pathlib.Path(__file__).resolve().parent.parent / "app"
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+RAIZ_APP = RAIZ / "app"
+#: The migrations ARE part of the guarantee: a migration that rewrites the
+#: trail breaks RNF-014 exactly as a service would, and unlike role or state
+#: names there is no legitimate reason for one to do it.
+RAIZ_MIGRACIONES = RAIZ / "migrations"
+
+#: The two tables the audit trail is made of (RF-036: ``evento_dominio``
+#: joined with ``intento_login``), by ORM class and by table name - the second
+#: because a migration writes SQL, not models.
+MODELOS_DE_LA_BITACORA = frozenset({"EventoDominio", "IntentoLogin"})
+TABLAS_DE_LA_BITACORA = frozenset({"evento_dominio", "intento_login"})
+
+#: ``UPDATE <tabla>`` / ``DELETE FROM <tabla>`` inside any string literal.
+#: ``op.execute(sa.text("DELETE FROM evento_dominio"))`` never touches an ORM
+#: class, so the AST check alone could not see it.
+SQL_QUE_MUTA = re.compile(
+    r"\b(update|delete\s+from)\s+[\"'`\[]?(" + "|".join(sorted(TABLAS_DE_LA_BITACORA)) + r")\b",
+    re.IGNORECASE,
+)
 
 
 def _periodo(dias: int = 30) -> tuple[str, str]:
@@ -287,50 +308,112 @@ def test_el_router_de_auditoria_solo_declara_lecturas(cliente_http):
 
 
 def _mutaciones_de_la_bitacora(arbol: ast.AST) -> list[str]:
-    """Llamadas que modificarían o borrarían una fila de la bitácora.
+    """Anything that would rewrite or erase a row of the audit trail.
 
-    Busca ``db.delete(...)``/``session.delete(...)`` con un modelo de la
-    bitácora dentro, y cualquier ``update(EventoDominio)`` / ``delete(...)``
-    de SQLAlchemy sobre esos modelos.
+    Three shapes, because there are three ways to write the same UPDATE:
+
+    1. ``db.delete(evento)`` / ``sa.update(EventoDominio)`` - the audit model
+       travels as an ARGUMENT. This is the only one the first version of the
+       guard could see;
+    2. ``db.query(EventoDominio).delete()`` - the model is in the CHAIN the
+       method is called on, and the call itself takes no arguments at all, so
+       looking only at ``args`` missed it completely;
+    3. ``op.execute("DELETE FROM evento_dominio")`` - no model anywhere. A
+       migration writes SQL, and a migration is exactly where somebody would
+       be tempted to "clean up" the log.
     """
-    modelos = {"EventoDominio", "IntentoLogin"}
     encontradas: list[str] = []
 
     for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.Constant) and isinstance(nodo.value, str):
+            coincidencia = SQL_QUE_MUTA.search(nodo.value)
+            if coincidencia is not None:
+                verbo = " ".join(coincidencia.group(1).split()).upper()
+                encontradas.append(f"SQL «{verbo} {coincidencia.group(2)}»")
+            continue
+
         if not isinstance(nodo, ast.Call):
             continue
-        objetivo = nodo.func
-        nombre = getattr(objetivo, "attr", None) or getattr(objetivo, "id", None)
+        nombre = getattr(nodo.func, "attr", None) or getattr(nodo.func, "id", None)
         if nombre not in {"delete", "update"}:
             continue
-        for argumento in nodo.args:
-            for hijo in ast.walk(argumento):
-                if isinstance(hijo, ast.Name) and hijo.id in modelos:
+
+        # The model may be an argument (shape 1) or part of the receiver
+        # chain (shape 2). Both are the same mutation.
+        alcance = [*nodo.args, *(clave.value for clave in nodo.keywords), nodo.func]
+        for parte in alcance:
+            for hijo in ast.walk(parte):
+                if isinstance(hijo, ast.Name) and hijo.id in MODELOS_DE_LA_BITACORA:
                     encontradas.append(f"{nombre}({hijo.id})")
-                if isinstance(hijo, ast.Attribute) and hijo.attr in modelos:
+                elif isinstance(hijo, ast.Attribute) and hijo.attr in MODELOS_DE_LA_BITACORA:
                     encontradas.append(f"{nombre}({hijo.attr})")
-    return encontradas
+
+    return sorted(set(encontradas))
 
 
 def test_ningun_modulo_modifica_ni_borra_la_bitacora():
     """RF-036 `CA-02` y RNF-014 («solo inserción»), por inspección de código.
 
-    El gemelo de ``test_ningun_modulo_compara_el_nombre_de_un_rol`` (P5) y de
-    ``test_ningun_modulo_compara_el_nombre_de_un_estado`` (P3): la garantía de
-    que la bitácora es inmutable no puede depender de que nadie escriba el
-    UPDATE, tiene que depender de que se note si alguien lo escribe.
+    El gemelo de ``test_ningun_modulo_decide_por_el_nombre_de_un_rol`` (P5) y
+    de ``test_ningun_modulo_decide_por_el_nombre_de_un_estado`` (P3): la
+    garantía de que la bitácora es inmutable no puede depender de que nadie
+    escriba el UPDATE, tiene que depender de que se note si alguien lo
+    escribe.
+
+    Se recorren ``app/`` **y ``migrations/``**. Aquí sí, al revés que en las
+    otras dos guardas: una migración de datos tiene motivos legítimos para
+    nombrar un rol o un estado, pero ninguno para reescribir la bitácora, y es
+    justo donde se escribiría un «limpiamos los eventos viejos» sin que nadie
+    lo llamase borrar la auditoría.
     """
     revisados = 0
     infracciones: list[str] = []
 
-    for archivo in sorted(RAIZ_APP.rglob("*.py")):
-        revisados += 1
-        arbol = ast.parse(archivo.read_text(encoding="utf-8"))
-        for hallazgo in _mutaciones_de_la_bitacora(arbol):
-            infracciones.append(f"{archivo.relative_to(RAIZ_APP)}: {hallazgo}")
+    for raiz in (RAIZ_APP, RAIZ_MIGRACIONES):
+        for archivo, arbol in modulos(raiz):
+            revisados += 1
+            for hallazgo in _mutaciones_de_la_bitacora(arbol):
+                infracciones.append(f"{archivo.relative_to(RAIZ)}: {hallazgo}")
 
-    assert revisados > 10, "el recorrido debería cubrir todo el paquete"
+    assert revisados > 10, "el recorrido debería cubrir app/ y migrations/"
     assert infracciones == []
+
+
+def test_la_guarda_de_la_bitacora_detecta_las_tres_formas_de_borrarla():
+    """La guarda, probada contra las tres formas que antes se le escapaban."""
+    fuente = """
+def por_argumento(db, sa):
+    db.delete(EventoDominio)
+
+def por_cadena(db):
+    db.query(IntentoLogin).delete()
+
+def por_sql(op, sa):
+    op.execute(sa.text("DELETE FROM evento_dominio WHERE ocurrido_en < :corte"))
+
+def por_sql_update(op, sa):
+    op.execute("UPDATE intento_login SET exitoso = true")
+"""
+    hallazgos = _mutaciones_de_la_bitacora(ast.parse(fuente))
+
+    assert "delete(EventoDominio)" in hallazgos, hallazgos
+    assert "delete(IntentoLogin)" in hallazgos, hallazgos
+    assert "SQL «DELETE FROM evento_dominio»" in hallazgos, hallazgos
+    assert "SQL «UPDATE intento_login»" in hallazgos, hallazgos
+
+
+def test_la_guarda_de_la_bitacora_no_marca_otras_tablas():
+    """Cerrar una exportación es un UPDATE legítimo: no es la bitácora.
+
+    ``reporte_exportacion`` tiene ciclo de vida y se actualiza; la guarda solo
+    protege las dos tablas de RF-036, no todo lo que lleve un UPDATE cerca.
+    """
+    fuente = """
+def cerrar(db, op, sa):
+    db.query(ReporteExportacion).update({"estado": "generado"})
+    op.execute(sa.text("UPDATE reporte_exportacion SET estado = 'generado'"))
+"""
+    assert _mutaciones_de_la_bitacora(ast.parse(fuente)) == []
 
 
 def test_el_repositorio_de_eventos_no_expone_ninguna_escritura_salvo_crear():
@@ -476,3 +559,88 @@ def test_la_tabla_de_intentos_no_guarda_la_contrasena(db, cliente_http):
     for intento in intentos:
         assert "UnaClaveMuyMala1" not in str(intento.__dict__)
         assert intento.motivo in (None, "CREDENCIALES_INVALIDAS", "CUENTA_BLOQUEADA")
+
+
+# --------------------------------------------------------------------------
+# RNF-014 - la bitácora exportada no se lee con el permiso de reportes
+# --------------------------------------------------------------------------
+#: El rol que la auditoría usó para entrar: ve reportes de venta y nada más.
+SOLO_REPORTES = ("reporte:leer",)
+
+
+def _exportar_bitacora(api_admin) -> dict:
+    desde, hasta = _periodo()
+    respuesta = api_admin.post(
+        f"{RUTA}/reportes/exportaciones",
+        json={"tipo": "auditoria", "formato": "csv", "desde": desde, "hasta": hasta},
+    )
+    assert respuesta.status_code == 201, respuesta.text
+    return respuesta.json()
+
+
+def test_un_rol_con_solo_reporte_leer_no_descarga_la_bitacora_del_administrador(
+    api_admin, cliente_http, db
+):
+    """RF-036 / RNF-014: el ataque que reprodujo la auditoría, ahora cerrado.
+
+    El administrador exporta la bitácora entera; un rol que solo tiene
+    ``reporte:leer`` intenta las tres puertas de lectura. ``solicitar``
+    validaba el permiso del tipo desde el primer día, pero ``obtener``,
+    ``archivo`` y ``listar`` **ni siquiera recibían los permisos**, así que la
+    bitácora completa se descargaba con el permiso de un reporte de ventas.
+
+    Lo que se comprueba no es que el test pase: es que **no salen bytes**.
+    """
+    from tests.conftest import api_a_medida
+
+    exportacion = _exportar_bitacora(api_admin)
+    assert (
+        api_admin.get(f"{RUTA}/reportes/exportaciones/{exportacion['id']}/archivo").status_code
+        == 200
+    ), "el administrador sí puede"
+
+    intruso = api_a_medida(cliente_http, db, "solo.reportes@aqualav.pe", SOLO_REPORTES)
+
+    detalle = intruso.get(f"{RUTA}/reportes/exportaciones/{exportacion['id']}")
+    archivo = intruso.get(f"{RUTA}/reportes/exportaciones/{exportacion['id']}/archivo")
+    listado = intruso.get(f"{RUTA}/reportes/exportaciones")
+
+    assert detalle.status_code == 403
+    assert codigo_error(detalle) == "PERMISO_DENEGADO"
+    assert archivo.status_code == 403
+    assert b"evento_dominio" not in archivo.content
+    assert archivo.headers.get("content-disposition") is None, "ni siquiera empieza la descarga"
+    assert listado.status_code == 200
+    assert [fila for fila in listado.json()["items"] if fila["tipo"] == "auditoria"] == []
+
+
+def test_el_permiso_del_tipo_se_valida_en_el_servicio_y_no_solo_en_el_router(db, usuario_admin):
+    """El patrón de INC-7, comprobado sin HTTP de por medio.
+
+    ``exportacion_service.obtener`` y ``.archivo`` se niegan con una lista de
+    permisos que no incluye ``auditoria:leer``, aunque la puerta HTTP se abra
+    con cualquiera de los dos permisos de lectura. Si mañana alguien escribe
+    un cuarto llamante, hereda el cierre.
+    """
+    import pytest
+
+    from app.core.errors import PermisoDenegado
+    from app.services import exportacion_service
+
+    fila = exportacion_service.solicitar(
+        db,
+        tipo="auditoria",
+        formato="csv",
+        desde=date.today() - timedelta(days=1),
+        hasta=date.today(),
+        autor=usuario_admin,
+        permisos=["auditoria:leer"],
+    )
+
+    with pytest.raises(PermisoDenegado):
+        exportacion_service.obtener(db, fila.id, permisos=["reporte:leer"])
+    with pytest.raises(PermisoDenegado):
+        exportacion_service.archivo(db, fila, permisos=["reporte:leer"])
+
+    # Con el permiso correcto sigue funcionando, que es la otra mitad.
+    assert exportacion_service.obtener(db, fila.id, permisos=["auditoria:leer"]).id == fila.id

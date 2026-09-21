@@ -26,6 +26,7 @@ from tests.conftest import (
     llevar_hasta_finalizado,
     proximo_lunes,
 )
+from tests.guardas_ast import decisiones_por_nombre, modulos
 
 RAIZ_APP = pathlib.Path(__file__).resolve().parent.parent / "app"
 
@@ -615,46 +616,59 @@ def test_el_catalogo_de_estados_requiere_token(cliente_http):
 # --------------------------------------------------------------------------
 # P3 by code inspection, the twin of RF-004 CA-03 for the state machine
 # --------------------------------------------------------------------------
-def _estados_en_comparaciones(arbol: ast.AST) -> list[str]:
-    """State names used inside any comparison of a module."""
-    nombres = {estado.value for estado in EstadoReserva}
-    encontradas: list[str] = []
-    for nodo in ast.walk(arbol):
-        if not isinstance(nodo, ast.Compare):
-            continue
-        for operando in [nodo.left, *nodo.comparators]:
-            for hijo in ast.walk(operando):
-                if (
-                    isinstance(hijo, ast.Constant)
-                    and isinstance(hijo.value, str)
-                    and hijo.value in nombres
-                ):
-                    encontradas.append(hijo.value)
-    return encontradas
-
-
-def test_ningun_modulo_compara_el_nombre_de_un_estado():
+def test_ningun_modulo_decide_por_el_nombre_de_un_estado():
     """EXTENSION POINT P3: la máquina de estados vive en la tabla.
 
-    El gemelo de ``RF-004 CA-03`` para los estados: si un servicio comparase
-    con un estado concreto, añadir un estado dejaría de ser insertar una fila.
-    ``app/seed.py`` (que siembra la tabla) y ``app/models/enums.py`` (que solo
-    deletrea el vocabulario) son las dos excepciones.
+    El gemelo de ``RF-004 CA-03`` para los estados: si un servicio decidiese
+    por un estado concreto, añadir un estado dejaría de ser insertar una fila.
+    Se buscan las cinco formas de ``tests/guardas_ast.py`` —comparación,
+    ``case``, índice en tabla de módulo, prueba sobre el texto y constante de
+    módulo—, no solo la comparación.
+
+    Dos excepciones: ``app/seed.py`` (que siembra la tabla) y
+    ``app/models/enums.py`` (que solo deletrea el vocabulario).
+    ``migrations/`` queda fuera por la misma razón que en la guarda de roles:
+    la migración ``0003`` convierte ``en_atencion`` en ``en_lavado`` y escribe
+    las dieciocho transiciones por nombre, que es precisamente lo que hace una
+    migración de datos. Ahí el nombre no decide: crea las filas donde se
+    decide.
     """
     permitidos = {RAIZ_APP / "seed.py", RAIZ_APP / "models" / "enums.py"}
+    nombres = frozenset(estado.value for estado in EstadoReserva)
     revisados = 0
     infracciones: list[str] = []
 
-    for archivo in sorted(RAIZ_APP.rglob("*.py")):
-        if archivo in permitidos:
-            continue
+    for archivo, arbol in modulos(RAIZ_APP, excluidos=permitidos):
         revisados += 1
-        arbol = ast.parse(archivo.read_text(encoding="utf-8"))
-        for nombre in _estados_en_comparaciones(arbol):
-            infracciones.append(f"{archivo.relative_to(RAIZ_APP)}: compara con «{nombre}»")
+        for linea, explicacion in decisiones_por_nombre(arbol, nombres):
+            infracciones.append(f"{archivo.relative_to(RAIZ_APP)}:{linea}: {explicacion}")
 
     assert revisados > 10, "el recorrido debería cubrir todo el paquete"
     assert infracciones == []
+
+
+def test_la_guarda_de_estados_detecta_la_constante_y_el_match():
+    """Las dos formas que más probablemente se escribirían aquí.
+
+    Un estado terminal cableado como constante de módulo y un ``match`` sobre
+    el estado son la manera natural de escribir el ``elif`` que P3 prohíbe.
+    Antes ninguna de las dos se notaba.
+    """
+    fuente = """
+ESTADO_FINAL = "entregado"
+
+def siguiente(estado):
+    match estado:
+        case "en_lavado":
+            return "secado"
+        case _:
+            return None
+"""
+    nombres = frozenset(estado.value for estado in EstadoReserva)
+    explicaciones = [texto for _, texto in decisiones_por_nombre(ast.parse(fuente), nombres)]
+
+    assert any("congela" in texto for texto in explicaciones), explicaciones
+    assert any("case" in texto for texto in explicaciones), explicaciones
 
 
 # --------------------------------------------------------------------------

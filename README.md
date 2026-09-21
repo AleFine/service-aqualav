@@ -214,10 +214,65 @@ criterios de aceptación (`CA-nn`) de los requisitos implementados:
 | `test_archivos.py` | Almacén de objetos: subida y servido genéricos · `RF-006` (foto de perfil) · `RF-009` v1.0 (imagen del servicio) · el tope de 1 MB y la travesía de directorios |
 | `test_evidencias.py` | RF-023 CA-01/CA-02 y flujos `3a`/`4a` · el tope de seis fotografías por momento · la precondición «servicio en curso», derivada de `transicion_estado` |
 | `test_calificaciones.py` | RF-031 CA-01/CA-02 y flujo `3b` · `RN-10` (ventana de 7 días calendario, una sola calificación) · promedio por servicio y por operario · el aviso «puedes calificar» como plantilla |
+| `test_migraciones.py` | La cadena de Alembic `0001`→head: `upgrade head`, `downgrade base`, ida y vuelta, y que el esquema que producen las migraciones y el que produce el ORM digan lo mismo |
 
 `SELECT … FOR UPDATE` no hace nada en SQLite: por eso la prueba de
 concurrencia afirma el **resultado** (exactamente un `201` y un `409`) y nunca
 el mecanismo de bloqueo.
+
+### Migraciones: las dos descripciones del esquema
+
+El esquema se describe **dos veces** —en `app/models/` y en
+`migrations/versions/`— y la suite levanta su base con
+`Base.metadata.create_all()`, así que durante mucho tiempo la cadena de Alembic
+solo se validaba a mano. `tests/test_migraciones.py` la ejecuta de verdad sobre
+un SQLite de usar y tirar y compara los dos esquemas con la misma maquinaria
+que usa `alembic revision --autogenerate`: cualquier columna, tipo, índice,
+clave foránea o `DEFAULT` que diverja rompe el test y dice cuál.
+
+Dos cosas quedan fuera de lo que SQLite puede ver, y conviene saberlo:
+
+* **`json` contra `jsonb`.** SQLite no distingue: ambos son afinidad `TEXT`. La
+  migración `0012` convierte `transaccion_pasarela.solicitud` y `.respuesta` a
+  `jsonb` en PostgreSQL —el ORM las declara así desde INC-4— y eso se comprueba
+  leyendo el SQL que Alembic emite sin conexión:
+
+  ```bash
+  DATABASE_URL=postgresql+psycopg2://u:p@localhost:5432/aqualav \
+      alembic upgrade 0011:0012 --sql | grep -i jsonb
+  # ALTER TABLE transaccion_pasarela ALTER COLUMN solicitud TYPE JSONB USING solicitud::jsonb;
+  # ALTER TABLE transaccion_pasarela ALTER COLUMN respuesta  TYPE JSONB USING respuesta::jsonb;
+  ```
+
+  > `--sql` es **solo para inspeccionar el DDL**. Alembic no interpola los
+  > parámetros de un `execute(text(...), {...})` en modo sin conexión, así que
+  > las concesiones de permisos salen con `= NULL` en el script —pasa igual en
+  > `0005`…`0011`, que usan el mismo patrón—. La actualización de verdad se
+  > hace con `alembic upgrade head` contra la base, que sí los enlaza.
+
+* **`DEFAULT true` contra `DEFAULT 1`.** La migración `0001` escribió los
+  booleanos con `sa.text("true")` —que llega al DDL como `DEFAULT true`— y la
+  `0006` con `sa.true()`, que en SQLite llega como `DEFAULT 1`. Son el mismo
+  valor por defecto, pero ninguna de las dos migraciones se puede reescribir,
+  así que **el ORM copia cada una exactamente como está**: `text("true")` en
+  `bahia.activa`, `servicio.activo` y `vehiculo.activo`, y `true()`/`false()`
+  en las columnas de la `0006`. La incoherencia es del esquema, no del ORM, y
+  copiarla es lo que permite que el test exija **lista de diferencias vacía,
+  sin una sola excepción**: un filtro «para el ruido conocido» es justo por
+  donde vuelve a entrar la deriva.
+
+Queda un detalle **redundante pero no roto** que no se ha tocado: nueve
+columnas únicas llevan a la vez la restricción `UNIQUE` implícita de
+`sa.Column(..., unique=True)` y un índice único `ix_*` propio
+(`calificacion.reserva_id`, `cupon_canje.codigo`, `dispositivo.token_push`,
+`recordatorio.reserva_id`, `reembolso.idempotency_key`,
+`token_recuperacion.token_hash`, `token_refresco.jti`,
+`transaccion_pasarela.idempotency_key`, `verificacion_correo.token_hash`).
+Quitar la duplicación exigiría un `DROP CONSTRAINT` sobre restricciones cuyo
+nombre generó PostgreSQL de forma implícita y que no está escrito en ninguna
+parte, más una reconstrucción completa de tabla en SQLite: riesgo real sobre
+instalaciones existentes a cambio de un índice de más que no cuesta nada salvo
+disco. Se deja documentado en vez de forzado.
 
 ---
 
@@ -644,3 +699,77 @@ Dockerfile · docker-compose.yml · docker-entrypoint.sh
 - Los valores de `.env.example` son de desarrollo. Antes de cualquier
   despliegue real hay que cambiar `SECRET_KEY`, `CORS_ORIGINS` y las
   credenciales de la base de datos, y desactivar el seed (`SEED_ENABLED=false`).
+
+---
+
+## 10. Decisiones explícitas y lo que no se verifica con un test
+
+Tres cosas de la v1.0 se han decidido **no** implementar. Están aquí porque una
+decisión que no se escribe se convierte, con el tiempo, en un descuido.
+
+### `RF-022 CA-01` — «en menos de 30 segundos» se verifica por Demostración
+
+El criterio dice: *dado un servicio en curso, cuando el estado cambia, entonces
+el cliente ve el nuevo estado **en menos de 30 segundos***. Es un presupuesto de
+latencia, y el servidor no gasta nada de él: en cuanto cambia el estado, el
+nuevo estado, `porcentaje_avance` y `hora_estimada_entrega` ya están escritos y
+cualquier lectura de la reserva los devuelve. Lo que cuesta el resto del
+presupuesto es **cada cuánto pregunta el cliente móvil**.
+
+> **El cumplimiento de `RF-022 CA-01` depende de que la app sondee
+> `GET /reservas/{id}` (o `GET /notificaciones`) con un intervalo **menor o
+> igual a 30 segundos**.**
+
+No hay WebSocket ni SSE **a propósito**: este es un proyecto de curso con
+infraestructura simulada, un canal push sería un segundo camino de entrega que
+mantener sincronizado con `notificacion_service`, y `RF-022` pide una latencia,
+no un transporte. La consecuencia honesta es que **es el único criterio de
+aceptación de los 36 requisitos que ningún test automatizado puede tocar**:
+ninguna prueba de esta suite puede observar el temporizador del cliente, y una
+que lo simulara se estaría midiendo a sí misma. Se verifica por **Demostración**,
+y así consta también en el docstring de `app/services/seguimiento_service.py`.
+
+### `RN-12` — la moneda es `PEN` por dato, no por enumeración
+
+Todo importe viaja como `{monto_centimos, moneda}` y **todo nace en `PEN`**: el
+valor por defecto está en `app/models/enums.py` (`MONEDA_PREDETERMINADA`), lo
+aplican el seed, los `server_default` de cada columna de moneda y los esquemas
+de entrada. `RN-12` se cumple en la práctica en cada fila del sistema.
+
+Lo que **no** se hace es convertir `moneda` en un `Enum` de un solo valor ni
+rechazar por validación cualquier otra cadena. Sería endurecer hoy lo que `P6`
+dejó abierto a propósito: el objeto `Dinero` existe precisamente para que el
+importe nunca sea un número suelto y para que un día se pueda facturar en otra
+divisa sin tocar cada columna. Cerrar la unión ahora ahorraría cero errores
+—ningún camino de código produce otra moneda— y costaría exactamente la
+extensibilidad por la que se escribió así.
+
+### `RN-01` — `EXIGIR_VEHICULO_VERIFICADO` viaja apagado
+
+`RN-01` v1.0 pide «al menos un vehículo registrado **y verificado**». La regla
+está implementada entera (`vehiculo.verificado` y el endpoint de verificación
+del mostrador) y el interruptor `EXIGIR_VEHICULO_VERIFICADO` decide si reservar
+la exige. **Sale apagado**, y hay un test en cada posición.
+
+El motivo es un bloqueo mutuo, no un olvido: ningún requisito describe cómo se
+verifica un vehículo **antes de su primera visita**, así que encenderlo dejaría
+a un cliente nuevo sin poder reservar la cita que permitiría al mostrador
+verificarle el coche (`RN-01` contra `RF-019`). Encenderlo es una decisión del
+negocio, y se toma cambiando una variable de entorno.
+
+### Autorización de las exportaciones (`RF-034`, `RF-036`, `RNF-014`)
+
+`POST /reportes/exportaciones` y las tres puertas de lectura
+(`GET /reportes/exportaciones`, `/{id}` y `/{id}/archivo`) se abren con
+**cualquiera** de los dos permisos de lectura, y es el servicio quien decide
+cuál exige de verdad el **tipo de la fila**: `auditoria:leer` para la bitácora,
+`reporte:leer` para los cuatro reportes de venta. Es el patrón de `INC-7`: *si
+una operación se alcanza por más de una puerta, el permiso se valida en el
+servicio*.
+
+El listado aplica además un **filtro horizontal por solicitante**, el mismo que
+`GET /reservas`. No es redundante con el anterior: una fila de
+`reporte_exportacion` guarda los filtros con los que se pidió —qué usuario, qué
+acción, qué entidad— así que ver las peticiones de otra persona dice qué estaba
+investigando aunque no se descargue ni un archivo. Los dos filtros cierran
+agujeros distintos y ninguno hace innecesario al otro.

@@ -14,6 +14,14 @@ too. It is therefore reachable with either reading permission, and WHICH one
 each report type demands is decided inside ``exportacion_service`` - the
 pattern INC-7 established: an operation reachable through more than one door
 validates its permission in the service, not only in its router.
+
+That applies to ALL FOUR export doors, not just to the one that creates the
+file: asking for an export, listing the requests, reading one back and
+downloading its bytes each carry the caller's permissions into the service,
+and the service decides on the ``tipo`` of the row in hand. The listing also
+filters by requester, because an export row remembers the filters it was
+asked with and those say what somebody was looking into (RF-034, RF-036,
+RNF-014).
 """
 
 from datetime import date
@@ -120,11 +128,26 @@ def exportar(
     summary="Listar las exportaciones solicitadas",
 )
 def listar_exportaciones(
-    _: Usuario = Depends(requiere_algun_permiso(*LECTURA)),
+    autor: Usuario = Depends(requiere_algun_permiso(*LECTURA)),
+    permisos: list[str] = Depends(permisos_actuales),
     db: Session = Depends(get_db),
 ) -> Lista[ExportacionOut]:
+    """Las exportaciones **propias** cuyo tipo el solicitante puede leer.
+
+    Dos filtros y no uno: el solicitante (filtro horizontal, el mismo que
+    aplica ``GET /reservas``) y el permiso del tipo de cada fila (filtro
+    vertical). El primero impide ver qué estuvo investigando otro
+    administrador —una fila de exportación guarda los filtros con los que se
+    pidió—; el segundo impide que un rol con solo ``reporte:leer`` vea las
+    exportaciones de auditoría. Ninguno de los dos hace innecesario al otro.
+    """
     return Lista[ExportacionOut](
-        items=[armar_exportacion(fila) for fila in exportacion_service.listar(db)]
+        items=[
+            armar_exportacion(fila)
+            for fila in exportacion_service.listar(
+                db, permisos=permisos, solicitado_por_id=autor.id
+            )
+        ]
     )
 
 
@@ -137,10 +160,16 @@ def listar_exportaciones(
 def obtener_exportacion(
     exportacion_id: int,
     _: Usuario = Depends(requiere_algun_permiso(*LECTURA)),
+    permisos: list[str] = Depends(permisos_actuales),
     db: Session = Depends(get_db),
 ) -> ExportacionOut:
-    """RF-034 `4a`: mientras el estado sea «pendiente» no hay archivo todavía."""
-    return armar_exportacion(exportacion_service.obtener(db, exportacion_id))
+    """RF-034 `4a`: mientras el estado sea «pendiente» no hay archivo todavía.
+
+    El permiso que exige el **tipo de la fila** se valida en el servicio: la
+    puerta admite cualquiera de los dos permisos de lectura y solo la fila
+    sabe cuál de los dos hace falta de verdad.
+    """
+    return armar_exportacion(exportacion_service.obtener(db, exportacion_id, permisos=permisos))
 
 
 @router.get(
@@ -154,11 +183,16 @@ def obtener_exportacion(
 def descargar_exportacion(
     exportacion_id: int,
     _: Usuario = Depends(requiere_algun_permiso(*LECTURA)),
+    permisos: list[str] = Depends(permisos_actuales),
     db: Session = Depends(get_db),
 ) -> RespuestaBinaria:
-    """RF-034: el CSV o el PDF generado. 409 si todavía no está listo."""
-    fila = exportacion_service.obtener(db, exportacion_id)
-    contenido, mime = exportacion_service.archivo(db, fila)
+    """RF-034: el CSV o el PDF generado. 409 si todavía no está listo.
+
+    RNF-014: descargar la bitácora exige ``auditoria:leer`` aunque la puerta
+    se abra también con ``reporte:leer``.
+    """
+    fila = exportacion_service.obtener(db, exportacion_id, permisos=permisos)
+    contenido, mime = exportacion_service.archivo(db, fila, permisos=permisos)
     return RespuestaBinaria(
         content=contenido,
         media_type=mime,

@@ -25,7 +25,7 @@ happens on every click.
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -138,7 +138,11 @@ class IntentoLogin(Base):
     usuario_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("usuario.id", ondelete="SET NULL"), nullable=True
     )
-    exitoso: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: ``server_default`` to match migration ``0006``: an attempt with no
+    #: verdict is a FAILED attempt, and that has to be true whoever writes it.
+    exitoso: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     #: An error CODE, never a message and never the password (RNF-014).
     motivo: Mapped[str | None] = mapped_column(String(40), nullable=True)
     ocurrido_en: Mapped[datetime] = mapped_column(

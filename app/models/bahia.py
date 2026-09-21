@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Integer, String
+from sqlalchemy import Boolean, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -21,8 +21,14 @@ class Bahia(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     nombre: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    #: ``text("true")`` y no ``true()``: es literalmente lo que escribió la
+    #: migración 0001 (``sa.text("true")``), y la migración no se puede
+    #: reescribir. Las columnas booleanas que llegaron en la ``0006`` usan
+    #: ``true()``/``false()`` porque ESA migración las escribió así. La
+    #: incoherencia es del esquema, no del ORM, y copiarla exactamente es lo
+    #: que permite que ``tests/test_migraciones.py`` no necesite excepciones.
     activa: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
     #: RF-020 CA-01: the assignment marks it occupied and the delivery (or the
     #: cancellation) frees it. Which moves free it is not listed anywhere: a

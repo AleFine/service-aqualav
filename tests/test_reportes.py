@@ -446,3 +446,77 @@ def test_el_barrido_del_planificador_informa_las_exportaciones_generadas(api_adm
 
     assert respuesta.status_code == 200
     assert respuesta.json()["exportaciones_generadas"] == []
+
+
+# --------------------------------------------------------------------------
+# GET /reportes/exportaciones - el listado, que no tenía ninguna prueba
+# --------------------------------------------------------------------------
+def _pedir_exportacion(api, tipo: str = "servicios", formato: str = "csv") -> dict:
+    desde, hasta = _periodo()
+    respuesta = api.post(
+        f"{RUTA}/reportes/exportaciones",
+        json={"tipo": tipo, "formato": formato, "desde": desde, "hasta": hasta},
+    )
+    assert respuesta.status_code in (201, 202), respuesta.text
+    return respuesta.json()
+
+
+def test_el_listado_de_exportaciones_devuelve_las_solicitadas_de_la_mas_nueva_a_la_mas_vieja(
+    api_admin,
+):
+    """RF-034 `4a`: la pantalla desde la que se vuelve a por el archivo.
+
+    Sin este listado no hay forma de recuperar una exportación asíncrona: el
+    202 devuelve un id y nadie lo apunta. Se comprueba el orden porque es lo
+    que hace útil la pantalla, y el contenido de cada fila porque es lo que la
+    app dibuja.
+    """
+    primera = _pedir_exportacion(api_admin, "servicios")
+    segunda = _pedir_exportacion(api_admin, "ingresos", "pdf")
+
+    respuesta = api_admin.get(f"{RUTA}/reportes/exportaciones")
+
+    assert respuesta.status_code == 200, respuesta.text
+    items = respuesta.json()["items"]
+    assert [fila["id"] for fila in items][:2] == [
+        segunda["id"],
+        primera["id"],
+    ], "la más nueva va primera"
+    reciente = items[0]
+    assert reciente["tipo"] == "ingresos"
+    assert reciente["formato"] == "pdf"
+    assert reciente["estado"] == EstadoExportacion.GENERADO.value
+    assert reciente["archivo_url"]
+
+
+def test_el_listado_de_exportaciones_exige_un_permiso_de_lectura(api_recepcion, cliente_http):
+    """RF-034: el mostrador no consulta reportes, y sin token no hay listado."""
+    assert api_recepcion.get(f"{RUTA}/reportes/exportaciones").status_code == 403
+    assert cliente_http.get(f"{RUTA}/reportes/exportaciones").status_code == 401
+
+
+def test_cada_quien_ve_sus_propias_exportaciones_y_no_las_de_otro(
+    api_admin, cliente_http, db, usuario_admin
+):
+    """RF-034 + RNF-014: filtro horizontal, el mismo que aplica ``GET /reservas``.
+
+    Una fila de exportación guarda **los filtros con los que se pidió** —qué
+    usuario, qué acción, qué entidad—, así que ver las peticiones de otro dice
+    qué estuvo investigando aunque no se descargue ni un archivo. Antes el
+    listado no filtraba por solicitante en absoluto.
+    """
+    from tests.conftest import api_a_medida
+
+    del_admin = _pedir_exportacion(api_admin, "servicios")
+    otro = api_a_medida(cliente_http, db, "otro.analista@aqualav.pe", ("reporte:leer",))
+    del_otro = _pedir_exportacion(otro, "ocupacion")
+
+    lista_admin = {
+        fila["id"] for fila in api_admin.get(f"{RUTA}/reportes/exportaciones").json()["items"]
+    }
+    lista_otro = {fila["id"] for fila in otro.get(f"{RUTA}/reportes/exportaciones").json()["items"]}
+
+    assert del_admin["id"] in lista_admin
+    assert del_otro["id"] not in lista_admin, "el administrador no ve la petición ajena"
+    assert del_otro["id"] in lista_otro
+    assert del_admin["id"] not in lista_otro
